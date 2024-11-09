@@ -1,0 +1,200 @@
+defaults:
+  - base_geometric_config
+  - _self_
+
+project_dir: ./projects/output/geometric/drivable_area
+seed: 0
+wandb_logging: True
+warmstart: False
+device: auto
+logging_level: info
+disable_postprocessing_inference: False
+profile: False
+
+dataset: 
+  #train_scenario_dir: &scenario_dir ./data/osm_recordings/ 
+  train_scenario_dir: &scenario_dir ./projects/output/geometric/drivable_area/generated_dataset #
+  # train_scenario_dir: &scenario_dir ../../data/highd-dataset-converted
+  test_scenario_dir: *scenario_dir # TODO
+  #val_scenario_dir: ./data/osm_recordings/
+  #val_scenario_dir: ./data/highd-sample/
+  val_scenario_dir: *scenario_dir
+  overwrite: True
+  pre_transform_workers: &num_workers 1
+  cache_data: False
+  max_samples_per_scenario: &max_samples_per_scenario 400
+  max_scenarios: &max_scenarios 200
+
+experiment: 
+  num_workers: *num_workers
+  pixel_size: &prediction_size 64 # if self.cfg.decoder_type == "ConvTranspose": assert self.cfg.prediction_size == 64
+  view_range: 70.0
+  edge_range: 80.0
+  add_temporal_vehicle_edges: True
+  enable_feature_normalization: False
+  enable_waypoint_resampling: True
+  disable_drivable_area_rasterizing: False
+  feature_normalization_params_path: ${project_dir}/dataset/normalization_params.pt
+  lanelet_fill_offset: 0.4
+  lanelet_fill_resolution: 10
+  lanelet_waypoint_density: 300
+  only_incoming_edges: True
+  remove_ego: False
+  render_collection: False
+
+  temporal:
+    enabled: False
+    # see sumo_simulation.max_samples
+    collect_time_steps: 20
+    # set collect_skip_time_steps to collect_time_steps - 1 for non-overlapping intervals
+    collect_skip_time_steps: 19
+    max_steps_temporal_edge: unlimited
+
+  dataset_generation:
+    render: False
+    # input_directory: ./data/highd-sample
+    input_directory: ../../data/highd-dataset-converted
+    output_directory: ./projects/output/geometric/drivable_area/generated_dataset
+    num_workers: *num_workers
+    time_steps_per_run: *max_samples_per_scenario
+    overwrite: True
+    max_scenarios: *max_scenarios
+    sumo_simulation:
+        delta_time: &delta_time 0.2
+        presimulation_steps: auto
+        p_wants_lane_change: 1.0
+        p_spawn: 0.0425
+
+  pre_transform:
+    lanelet_max_segment_length: 100.0 # 20.0
+    lanelet_sampling_weights_num_bins: 0.1
+
+model:
+  #model_cls: ScenarioDrivableAreaModel # {ScenarioDrivableAreaModel, RoadCoveragePredictionModel, TemporalTrajectoryPredictionModel}
+  model_cls: ScenarioDrivableAreaModel
+
+  input_graph_features:
+    lanelet: &lanelet_features 2
+    lanelet_to_lanelet: &lanelet_to_lanelet_features 8
+    vehicle: 8
+    vehicle_to_vehicle: 10
+    lanelet_to_vehicle: 0
+    vehicle_to_lanelet: 6
+
+  graph_features:
+    node_features: &node_features 128
+
+  lanelet_network_encoder:
+    # Lanelet node features
+    lanelet_features: *lanelet_features
+    node_feature_size: *node_features
+    # node_feature_mlp_layers: 2
+
+    # vertex_feature_encoder: LSTM
+    vertex_feature_encoder: GRU
+    # vertex_feature_encoder: DeepSet
+
+    # RNN to encode lanelet vertices
+    rnn_hidden_size: 64
+
+    # Invariant deep set model to encode lanelet vertices
+    deep_set_mlp_dropout: 0.1
+    deep_set_aggregation: sum
+
+    # Lanelet edge features
+    lanelet_to_lanelet_features: *lanelet_to_lanelet_features
+    edge_feature_size: 32
+
+    edge_type_encoding: embedding
+    # edge_type_encoding: one-hot
+    node_type_embedding_dim: 10
+
+  traffic:
+    # Drivable area prediction
+    temporal:
+      enabled: false
+      steps_observe: 5
+      steps_predict: 15
+
+    lanelet_node_feature_size: *node_features
+    vehicle_node_feature_size: *node_features
+    temporal_edge_feature_size: 12
+    temporal_edge_freq_init_const: 10
+
+    v2v_edge_feature_size: 32
+    v2l_edge_feature_size: 32
+    l2v_edge_feature_size: 32
+
+    gnn:
+      conv_layers: 8
+      # activation_fn: gelu
+      activation_fn: leakyrelu
+      attention_channels: 128
+      attention_heads: 16
+      add_self_loops: true
+      global_context: true
+      global_context_size: *node_features
+      residual_connection: false
+
+    ablation:
+      remove_l_v_edges: false
+      remove_vtv_edges: false
+      remove_edge_attributes: false
+
+  road_coverage:
+    # GNN
+    # gnn_type: EGATConv
+    gnn_type: HEATConv
+    gnn_conv_layers: 3
+    gnn_skip_connections: true
+
+    node_feature_size: 256
+    edge_feature_size: 16
+
+    gnn_attention_heads: 4
+
+    jumping_knowledge: concat
+    node_output_size: *node_features
+
+    training_resample_ratio: 0.5
+
+  drivable_area_decoder:
+    node_feature_size: *node_features
+    prediction_size: *prediction_size
+
+    # decoder_type: Transformer
+    decoder_type: ConvTranspose
+    # decoder_type: Upsample Conv
+    # decoder_type: MLP
+
+
+training: 
+  backward_freq: 1
+  batch_size: 1
+  checkpoint_frequency: 1000
+  early_stopping: 
+  enable_multi_gpu: False
+  enable_rendering: False
+  render_subprocess: True
+  gradient_clipping_threshold: 10.0
+  log_freq: 2000
+  max_epochs: 1_000_000_000
+  max_optimize_samples: 1
+  overfit: False
+  shuffle: True
+  swallow_errors: False
+  test_freq: 1
+  test_split: 1
+  validate_inner: False
+  validation_freq:  1
+  validation_split:  1
+  verbose: 1
+  video_freq: 1000
+  video_length: 400
+  video_record_backoff: 1.25
+  lr_scheduler_cls: CosineAnnealingWarmRestarts
+  lr_scheduler_kwargs:
+    T_0: 80
+    T_mult: 1
+    eta_min: 0.0001
+

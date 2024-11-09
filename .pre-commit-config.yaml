@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: requirements-txt-fixer
+  - repo: https://github.com/pre-commit/mirrors-autopep8
+    rev: 'v2.0.4'  # Use the sha / tag you want to point at
+    hooks:
+    -   id: autopep8
+        args: ['--max-line-length=120', '--aggressive', '--in-place', '--verbose', '--ignore=E702']
+
+
+

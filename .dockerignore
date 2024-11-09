@@ -1,0 +1,34 @@
+# Git specific
+.git/lfs
+# Project specific
+/img
+data/
+**/output/
+outputs/
+profiles/
+wandb/
+
+tutorials/scenarios
+commonroad_geometric/simulation/interfaces/interactive/config_files
+
+# Python specific
+# https://github.com/GoogleCloudPlatform/getting-started-python/blob/main/optional-kubernetes-engine/.dockerignore
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.mypy_cache
+.pytest_cache
+.hypothesis

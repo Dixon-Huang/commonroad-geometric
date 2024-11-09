@@ -1,0 +1,19 @@
+stages:
+  - test
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+cache:
+  paths:
+    - .cache/pip
+    - venv/
+test:
+  # Here we specify the image in settings
+  image: gitlab.lrz.de:5005/cps/commonroad-geometric:latest
+  stage: test
+  script:
+    - python -m pytest -vvv --cov-config=.coveragerc --cov=./ ./commonroad_geometric/tests
+    - pip install coverage==7.2.7
+    - coverage xml  -o reports/coverage.xml
+  artifacts:
+    paths:
+      - reports/coverage.xml

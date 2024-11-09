@@ -1,0 +1,101 @@
+#TODO：delete some redundant configurations
+
+defaults:
+  - custom_rl_config
+  - _self_
+
+device: auto
+project_dir: ./projects/output/rl/predictive_traffic_rule_compliance
+#scenario_dir: /home/hya/dataset-converters/output
+scenario_dir: /home/yanliang/dataset/data/highd-sample/DEU_LocationALower-11_19_T-1.xml
+#scenario_dir: /home/yanliang/reactive-planner/example_scenarios/ZAM_Tjunction-1_42_T-1.xml
+#scenario_dir: /home/yanliang/commonroad-geometric/dataset/DEU_LocationALower-11_1_T-1.xml
+#scenario_dir: /home/yanliang/commonroad-geometric/data/highd-sample
+seed: 0
+warmstart: False
+profile: False
+
+training:
+  wandb_logging: False # original True
+  checkpoint_freq: 5000
+  eval_freq: 10
+  gradient_save_freq: 1
+  log_freq: 1
+  n_envs: 1  # Original 1
+  n_eval_episodes: 10
+  normalize_observations: False
+  normalize_rewards: False
+  normalize_rewards_threshold: 10.0
+
+  video_recording: False
+  record_backoff: 1.0
+  video_frequency: 10000
+  total_timesteps: 1_000_000 # original 1_000_000
+  verbose: 0
+  video_length: 500 # original 1000
+
+model:
+  gae_lambda: 0.8
+  gamma: 0.99
+  n_epochs: 8
+  ent_coef: 1e-2
+  n_steps: 256  # original 256
+  batch_size: 32 # original 32
+  vf_coef: 0.5
+  max_grad_norm: 10.0
+  learning_rate: 5e-4
+  clip_range: 0.2
+  gnn_out_dim: 80
+  gnn_hidden_dim: 80
+  gnn_layers: 3
+
+  reactive_planner:
+    planning:
+      dt: 0.1
+      replanning_frequency: 5 # original 3
+      time_steps_computation: 20
+
+    vehicle:
+      # CR vehicle type (see commonroad-vehicle-models): #1: Ford Escort, #2: BMW 320i, 3 = VW Vanagon
+      id_type_vehicle: 1
+
+    sampling:
+      sampling_method: 1 # original 1
+      t_min: 0.4
+      num_sampling_levels: 4 # original 4
+
+    debug:
+      show_plots: True
+      save_plots: True
+      draw_traj_set: True
+      draw_icons: False
+      multiproc: False # original True
+      num_workers: 1 # original 6
+
+experiment:
+  data_padding_size: 200
+  edge_drawer_class_name: "KNearestEdgeDrawer"  # or "VoronoiEdgeDrawer"
+  dist_threshold_v2v: 50.0
+  edge_drawer_k: 3
+  ego_map_radius: 50.0
+
+  render_on_step: True # original False
+  render_debug_overlays: True # original True
+  enable_traffic: True
+  raise_exceptions: False
+
+  linear_lanelet_projection: True
+  enable_waypoint_resampling: True
+  lanelet_waypoint_density: 10
+
+  spawning:
+    min_goal_distance: 100.0 # original 100.0
+    max_goal_distance: 150.0 # original 150.0
+    min_vehicle_distance: 10.0
+
+  enable_sumo: True
+  sumo_simulation:
+    presimulation_steps: 100
+    p_wants_lane_change: 1.0 # original 0.8
+
+cmd: "train"
