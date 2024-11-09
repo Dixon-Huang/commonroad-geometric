@@ -387,7 +387,7 @@ class InteractivePlanner:
 
         return state_list
 
-    def visualize_trajectory(self, ego_vehicle, reactive_planner, config):
+    def visualize_trajectory(self, ego_vehicle, reactive_planner, config, current_timestep):
         if config.debug.show_plots or config.debug.save_plots:
             sampled_trajectory_bundle = None
             if config.debug.draw_traj_set:
@@ -396,7 +396,8 @@ class InteractivePlanner:
                                           planning_problem=config.planning_problem,
                                           ego=ego_vehicle, traj_set=sampled_trajectory_bundle,
                                           ref_path=reactive_planner.reference_path,
-                                          timestep=ego_vehicle.prediction.trajectory.final_state.time_step,
+                                          # timestep=ego_vehicle.prediction.trajectory.final_state.time_step,
+                                          timestep=current_timestep,
                                           config=config)
 
     def initialize(self, folder_scenarios, name_scenario):
@@ -551,7 +552,7 @@ class InteractivePlanner:
         # update action
         if not time_step == 0 and self.last_semantic_action in {1, 2}:
             action.T -= 0.1
-            # if action.T <= 0.5:
+            # if action.T <= 0.5
             #     self.is_new_action_needed = True
 
         # 判断是否到达目标
@@ -606,13 +607,6 @@ class InteractivePlanner:
             #     rnd.render()
             #     plt.show()
 
-            plt.figure(figsize=(25, 10))
-            rnd = MPRenderer()
-            rnd.draw_params.time_begin = time_step
-            scenario.draw(rnd)
-            planning_problem_set.draw(rnd)
-            rnd.render()
-            plt.show()
 
             # too close to front car, start to car-following
             if not (front_veh_info['dhw'] == -1 or time_step == 0 or self.ego_state.velocity == 0) and self.last_action:
@@ -744,14 +738,14 @@ class InteractivePlanner:
                     # set reference path for curvilinear coordinate system and desired velocity
                     planner.set_reference_path(route.reference_path)
 
-                    # if not self.is_reach_goal_region:
-                    #     planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
-                    #                                                    desired_d=0.0,
-                    #                                                    desired_s=planner.desired_lon_position,
-                    #                                                    simulation=simulation,
-                    #                                                    # traffic_extractor=extractor,
-                    #                                                    ego_vehicle=ego_vehicle,
-                    #                                                    ))
+                    if not self.is_reach_goal_region:
+                        planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
+                                                                       desired_d=0.0,
+                                                                       desired_s=planner.desired_lon_position,
+                                                                       simulation=simulation,
+                                                                       # traffic_extractor=extractor,
+                                                                       ego_vehicle=ego_vehicle,
+                                                                       ))
 
                     # **************************
                     # Run Planning
@@ -761,9 +755,10 @@ class InteractivePlanner:
 
                     # new planning cycle -> plan a new optimal trajectory
                     if self.is_reach_goal_region:
-                        desired_velocity = sumo_ego_vehicle.current_state.velocity - 2 if sumo_ego_vehicle.current_state.velocity > 3 else 0
-                        planner.set_desired_velocity(desired_velocity=desired_velocity, current_speed=planner.x_0.velocity,
-                                                     stopping=True)
+                        # desired_velocity = sumo_ego_vehicle.current_state.velocity - 2 if sumo_ego_vehicle.current_state.velocity > 3 else 0
+                        # planner.set_desired_velocity(desired_velocity=desired_velocity, current_speed=planner.x_0.velocity,
+                        #                              stopping=True)
+                        reactive_planner_config.sampling.longitudinal_mode = "stopping"
                     else:
                         planner.set_desired_velocity(current_speed=planner.x_0.velocity)
                         try:
@@ -777,13 +772,13 @@ class InteractivePlanner:
                     if not optimal:  # 如果返回None或False
                         x_0 = planner.x_0
                         rp_failure_ego_vehicle = planner.convert_state_list_to_commonroad_object([x_0])
-                        self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config)
+                        self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config, time_step)
                         raise ValueError("Planning failed: optimal is None or False")
 
                     rp_ego_vehicle = planner.convert_state_list_to_commonroad_object(optimal[0].state_list)
                     next_states = rp_ego_vehicle.prediction.trajectory.state_list[1:]
                     self.next_states_queue = self.convert_to_state_list(next_states)
-                    self.visualize_trajectory(rp_ego_vehicle, planner, reactive_planner_config)
+                    self.visualize_trajectory(rp_ego_vehicle, planner, reactive_planner_config, time_step)
 
                     self.is_new_action_needed = False
 
@@ -849,11 +844,11 @@ def main(cfg: RLProjectConfig):
 
     # name_scenario = "ZAM_Tjunction-1_270_I-1-1"
     # name_scenario = "ZAM_Tjunction-1_517_I-1-1"
-    # name_scenario = "DEU_Ffb-2_2_I-1-1"
+    name_scenario = "DEU_Ffb-2_2_I-1-1"
     # name_scenario = "DEU_A9-2_1_I-1-1"
     # name_scenario = "ZAM_Zip-1_20_I-1-1"
     # name_scenario = "DEU_Muc-4_2_I-1-1"
-    name_scenario = "ZAM_Tjunction-1_32_I-1-1"
+    # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
 
     main_planner = InteractivePlanner()
 
@@ -871,6 +866,16 @@ def main(cfg: RLProjectConfig):
     # simulated scenarios
     path_scenarios_simulated = os.path.join(output_path, 'simulated_scenarios/')
 
+    # get trajectory
+    ego_vehicle = list(ego_vehicles.values())[0]
+    trajectory = ego_vehicle.driven_trajectory.trajectory
+    trajectory._state_list = [ego_vehicle.initial_state] + trajectory.state_list
+    global_feasible = False
+    global_recon_num = 0
+
+    for state in trajectory.state_list:
+        state.yaw_rate = 0
+
     # create mp4 animation
     create_video(simulated_scenario,
                  output_folder_path,
@@ -879,12 +884,6 @@ def main(cfg: RLProjectConfig):
                  True,
                  "_planner")
 
-    # get trajectory
-    ego_vehicle = list(ego_vehicles.values())[0]
-    trajectory = ego_vehicle.driven_trajectory.trajectory
-    trajectory._state_list = [ego_vehicle.initial_state] + trajectory.state_list
-    global_feasible = False
-    global_recon_num = 0
     # try:
     #     while not (global_feasible or global_recon_num > 200):
     #         feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,

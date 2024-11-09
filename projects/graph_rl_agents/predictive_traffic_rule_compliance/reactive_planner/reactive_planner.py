@@ -604,21 +604,21 @@ class ReactivePlanner(object):
         # set low velocity mode given initial velocity in self.x_0
         self._low_vel_mode = True if self.x_0.velocity < self.config.planning.low_vel_mode_threshold else False
 
-        # logger.info("===============================================================")
+        logger.info("===============================================================")
         logger.info("=================== Starting Planning Cycle ===================")
-        # logger.info(f"==== Initial state Cartesian ====")
-        # logger.info(f"time_step={self.x_0.time_step}")
-        # logger.info(
-        #     f"position={self.x_0.position}, steering_angle={self.x_0.steering_angle}, velocity={self.x_0.velocity}")
-        # logger.info(
-        #     f"orientation={self.x_0.orientation}, acceleration={self.x_0.acceleration}, yaw_rate={self.x_0.yaw_rate}")
-        # logger.info(f"==== Initial state Curvilinear ====")
-        # logger.info(f"longitudinal state = {x_0_lon}")
-        # logger.info(f"lateral state = {x_0_lat}")
-        # logger.info(f"==== Target states ====")
-        # logger.info(f"longitudinal driving mode: {self.config.sampling.longitudinal_mode}")
-        # logger.info(f"desired velocity: {self._desired_speed} m/s")
-        # logger.info(f"desired longitudinal position: {self._desired_lon_position} m")
+        logger.info(f"==== Initial state Cartesian ====")
+        logger.info(f"time_step={self.x_0.time_step}")
+        logger.info(
+            f"position={self.x_0.position}, steering_angle={self.x_0.steering_angle}, velocity={self.x_0.velocity}")
+        logger.info(
+            f"orientation={self.x_0.orientation}, acceleration={self.x_0.acceleration}, yaw_rate={self.x_0.yaw_rate}")
+        logger.info(f"==== Initial state Curvilinear ====")
+        logger.info(f"longitudinal state = {x_0_lon}")
+        logger.info(f"lateral state = {x_0_lat}")
+        logger.info(f"==== Target states ====")
+        logger.info(f"longitudinal driving mode: {self.config.sampling.longitudinal_mode}")
+        logger.info(f"desired velocity: {self._desired_speed} m/s")
+        logger.info(f"desired longitudinal position: {self._desired_lon_position} m")
 
         # initialize optimal trajectory dummy
         optimal_trajectory = None

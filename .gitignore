@@ -149,7 +149,7 @@ cython_debug/
 .gitmessage
 
 # Output files
-data/
+
 output/
 outputs/
 profiles/

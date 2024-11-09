@@ -62,10 +62,10 @@ model:
     sampling:
       sampling_method: 1 # original 1
       t_min: 0.4
-      num_sampling_levels: 2 # original 4
+      num_sampling_levels: 3 # original 4
 
     debug:
-      show_plots: True
+      show_plots: False
       save_plots: True
       draw_traj_set: True
       draw_icons: False
