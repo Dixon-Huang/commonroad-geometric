@@ -1046,7 +1046,6 @@ class ReactivePlanner(object):
             theta = trajectory.cartesian.theta
 
             collide = False
-            # Change
             # check each pose for collisions
             for i in range(len(pos1)):
                 ego = pycrcc.TimeVariantCollisionObject(self.x_0.time_step + i * self.config.planning.factor)

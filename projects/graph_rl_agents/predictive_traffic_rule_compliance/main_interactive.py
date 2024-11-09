@@ -10,7 +10,6 @@ from torch.optim import Adam
 from dataclasses import dataclass
 from omegaconf import OmegaConf
 from commonroad.prediction.prediction import TrajectoryPrediction
-from commonroad.common.solution import VehicleType
 from commonroad.common.file_reader import CommonRoadFileReader
 from commonroad.visualization.mp_renderer import MPRenderer
 from commonroad_rp.utility.logger import initialize_logger
@@ -477,6 +476,7 @@ class InteractivePlanner:
                 planning_problem.initial_state.orientation = copy.deepcopy(sumo_ego_vehicle.current_state.orientation)
                 planning_problem.initial_state.velocity = copy.deepcopy(sumo_ego_vehicle.current_state.velocity)
                 planning_problem.initial_state.acceleration = copy.deepcopy(sumo_ego_vehicle.current_state.acceleration)
+                planning_problem.initial_state.time_step = sumo_sim.current_time_step
                 # ====== plug in your motion planner here
                 # ====== paste in simulations
 
@@ -495,7 +495,6 @@ class InteractivePlanner:
                                            simulation_options,
                                            # extractor_factory,
                                            dt,
-                                           step,
                                            lanelets_of_goal_position)
 
                 logger.info(f'next ego position: {next_state.position}, next ego velocity: {next_state.velocity}, next ego orientation: {next_state.orientation}')
@@ -540,7 +539,6 @@ class InteractivePlanner:
             simulation_options,
             # extractor_factory,
             dt,
-            step,
             lanelets_of_goal_position
     ):
         logger.info(f"ego position: {sumo_ego_vehicle.current_state.position}, ego velocity: {sumo_ego_vehicle.current_state.velocity}, ego orientation: {sumo_ego_vehicle.current_state.orientation}")
@@ -570,12 +568,12 @@ class InteractivePlanner:
             # 到达目标区域，开始减速
             self.is_reach_goal_region = True
 
-        current_count = step
+        current_count = time_step
         # check if planning cycle or not
         plan_new_trajectory = current_count % reactive_planner_config.planning.replanning_frequency == 0
 
         if plan_new_trajectory or self.is_new_action_needed or len(self.next_states_queue) == 0:
-            if step == 0:
+            if time_step == 0:
                 # run route planner and add reference path to config
                 try:
                     route_planner = RoutePlanner(scenario.lanelet_network,
@@ -586,17 +584,18 @@ class InteractivePlanner:
                     logger.info("***Route planning failed***")
             route = self.route
 
-            # check if start to car-following
-            front_veh_info = front_vehicle_info_extraction(self.scenario,
-                                                           self.ego_state.position,
-                                                           self.lanelet_route)
-
+            # Predict obstacle trajectories
             num_time_steps = reactive_planner_config.planning.time_steps_computation
             for obstacle in scenario.obstacles:
                 obstacle.initial_state.time_step = time_step
                 predicted_states = predict_constant_velocity(obstacle.initial_state, dt, num_time_steps)
                 trajectory = Trajectory(time_step, [obstacle.initial_state] + predicted_states)
                 obstacle.prediction = TrajectoryPrediction(trajectory, shape=obstacle.obstacle_shape)
+
+            # check if start to car-following
+            front_veh_info = front_vehicle_info_extraction(self.scenario,
+                                                           self.ego_state.position,
+                                                           self.lanelet_route)
 
             # for i in range(time_step, time_step + num_time_steps):
             #     plt.figure(figsize=(25, 10))
@@ -607,6 +606,13 @@ class InteractivePlanner:
             #     rnd.render()
             #     plt.show()
 
+            # plt.figure(figsize=(25, 10))
+            # rnd = MPRenderer()
+            # rnd.draw_params.time_begin = time_step
+            # scenario.draw(rnd)
+            # planning_problem_set.draw(rnd)
+            # rnd.render()
+            # plt.show()
 
             # too close to front car, start to car-following
             if not (front_veh_info['dhw'] == -1 or time_step == 0 or self.ego_state.velocity == 0) and self.last_action:
@@ -773,12 +779,29 @@ class InteractivePlanner:
                         x_0 = planner.x_0
                         rp_failure_ego_vehicle = planner.convert_state_list_to_commonroad_object([x_0])
                         self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config, time_step)
-                        raise ValueError("Planning failed: optimal is None or False")
+                        raise Exception("Reactive Planner failed to plan optimal trajectory")
+                        # for i in range(9):
+                        #     desired_velocity = sumo_ego_vehicle.current_state.velocity - (i + 1) if sumo_ego_vehicle.current_state.velocity > (i + 1) else 0
+                        #     planner.set_cost_function()
+                        #     planner.set_desired_velocity(desired_velocity=desired_velocity, current_speed=planner.x_0.velocity,
+                        #                                  stopping=True)
+                        #     # reactive_planner_config.sampling.longitudinal_mode = "stopping"
+                        #     try:
+                        #         optimal = planner.plan()
+                        #         if not optimal:  # 如果返回None或False
+                        #             x_0 = planner.x_0
+                        #             rp_failure_ego_vehicle = planner.convert_state_list_to_commonroad_object([x_0])
+                        #             self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config,
+                        #                                       time_step)
+                        #             raise Exception("Reactive Planner failed to plan optimal trajectory")
+                        #         break
+                        #     except:
+                        #         continue
 
                     rp_ego_vehicle = planner.convert_state_list_to_commonroad_object(optimal[0].state_list)
                     next_states = rp_ego_vehicle.prediction.trajectory.state_list[1:]
                     self.next_states_queue = self.convert_to_state_list(next_states)
-                    self.visualize_trajectory(rp_ego_vehicle, planner, reactive_planner_config, time_step)
+                    # self.visualize_trajectory(rp_ego_vehicle, planner, reactive_planner_config, time_step)
 
                     self.is_new_action_needed = False
 
@@ -787,6 +810,7 @@ class InteractivePlanner:
                       f"failed reason: {e}")
                 self.is_new_action_needed = True
                 if self.is_reach_goal_region:
+                    logging.info("use Lattice to break")
                     # 直接刹车
                     # next_state = brake(ego_vehicle.current_state, self.goal_info[1], self.goal_info[2])
                     action = brake(self.scenario, sumo_ego_vehicle)
@@ -801,6 +825,7 @@ class InteractivePlanner:
                     return next_state
 
                 if self.is_new_action_needed:
+                    logging.info('use MCTs and Lattice to plan')
                     mcts_planner = MCTs_CR(scenario, planning_problem, self.lanelet_route, sumo_ego_vehicle)
                     semantic_action, action, self.goal_info = mcts_planner.planner(time_step)
                     self.is_new_action_needed = False
@@ -830,8 +855,8 @@ def main(cfg: RLProjectConfig):
     cfg_obj = OmegaConf.to_object(cfg)
 
     # folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
-    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
-    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
+    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
+    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
 
     # name_scenario = "DEU_Frankfurt-73_2_I-1"
     # name_scenario = "DEU_Frankfurt-95_6_I-1"
@@ -839,16 +864,17 @@ def main(cfg: RLProjectConfig):
 
     # name_scenario = "DEU_Cologne-63_5_I-1"
     # name_scenario = "DEU_Frankfurt-34_11_I-1"
-    # name_scenario = "DEU_Aachen-2_1_I-1"
+    name_scenario = "DEU_Aachen-2_1_I-1"
     # name_scenario = "DEU_Aachen-3_1_I-1"
 
     # name_scenario = "ZAM_Tjunction-1_270_I-1-1"
     # name_scenario = "ZAM_Tjunction-1_517_I-1-1"
-    name_scenario = "DEU_Ffb-2_2_I-1-1"
+    # name_scenario = "DEU_Ffb-2_2_I-1-1"
     # name_scenario = "DEU_A9-2_1_I-1-1"
     # name_scenario = "ZAM_Zip-1_20_I-1-1"
     # name_scenario = "DEU_Muc-4_2_I-1-1"
     # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
+    # name_scenario = "ZAM_Zip-1_69_I-1-1"
 
     main_planner = InteractivePlanner()
 

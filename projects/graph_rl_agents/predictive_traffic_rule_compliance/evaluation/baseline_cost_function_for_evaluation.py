@@ -45,6 +45,8 @@ class BaselineCostFunction(CostFunction):
         # self.distance_threshold = 30.0  # 开始增加权重的距离阈值（米）
         # self.exp_factor = 2.0  # 指数增长因子
 
+        # self.saved_ego_vehicle_world_state = copy.deepcopy(self.simulation.world_state.vehicle_by_id(-1))
+
         # List of robustness types (rules)
         if robustness_types is None:
             # Default to all the rules you provided
@@ -88,24 +90,24 @@ class BaselineCostFunction(CostFunction):
                      (100 * (trajectory.cartesian.v[
                                  int(len(trajectory.cartesian.v) / 2)] - self.desired_speed) ** 2)
         if self.desired_s is not None:
-            costs += 20 * 5 * np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
+            costs += 50 * 5 * np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
                      (20 * (self.desired_s - trajectory.curvilinear.s[-1])) ** 2
 
         # Distance costs
-        costs += 20 * 5 * np.sum((0.25 * (self.desired_d - trajectory.curvilinear.d)) ** 2) + \
+        costs += 50 * 5 * np.sum((0.25 * (self.desired_d - trajectory.curvilinear.d)) ** 2) + \
                  (20 * (self.desired_d - trajectory.curvilinear.d[-1])) ** 2
 
         # Orientation costs
         costs += np.sum((0.25 * np.abs(trajectory.curvilinear.theta)) ** 2) + (
                 5 * (np.abs(trajectory.curvilinear.theta[-1]))) ** 2
 
-        # # low speed costs
-        # speed_diff = np.maximum(0, self.min_desired_speed - trajectory.cartesian.v)
+        # low speed costs
+        speed_diff = np.maximum(0, self.min_desired_speed - trajectory.cartesian.v)
         # costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
-        # # costs += self.w_low_speed * np.sum(speed_diff ** 2)
+        costs += self.w_low_speed * np.sum(speed_diff ** 2)
 
         epsilon = 1e-6  # 防止除以零
-        beta = 1e2  # 静态障碍物权重
+        beta = 2e2  # 静态障碍物权重
         gamma = beta  # 动态障碍物权重
 
         # 使用反比例函数计算与静态障碍物的距离成本
@@ -149,6 +151,8 @@ class BaselineCostFunction(CostFunction):
         )
         self.simulation.lifecycle.run_ego()
         # self.traffic_extractor._simulation = self.simulation
+        # 重置world_state的ego_vehicle状态
+        remove_future_states(self.simulation.world_state.vehicle_by_id(-1), self.simulation.current_time_step)
 
         return costs
 
@@ -162,6 +166,7 @@ class BaselineCostFunction(CostFunction):
             # Initialize RuleEvaluator with all the rules
             ego_vehicle_world_state = self.simulation.world_state.vehicle_by_id(-1)
             rule_evaluators = []
+            # ego_vehicle_world_state.end_time = self.simulation.current_time_step + len(trajectory.cartesian.x) - 1
             for rule in self.robustness_types:
                 rule_evaluator = RuleEvaluator.create_from_config(
                     self.simulation.world_state,
@@ -202,6 +207,7 @@ class BaselineCostFunction(CostFunction):
 
                 # if i + 1 in indices_set:
                 total_robustness = 0.0
+                # ego_vehicle_world_state.end_time = self.simulation.current_time_step
                 for evaluator in rule_evaluators:
                     try:
                         robustness_series = evaluator.evaluate()
@@ -210,7 +216,8 @@ class BaselineCostFunction(CostFunction):
                         if robustness == float('inf'):
                             continue
                         total_robustness += robustness
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error in robustness calculation: {e}")
                         continue
                 robustness_list.append(total_robustness)
             return robustness_list, indices, len(trajectory.cartesian.x)
@@ -298,3 +305,24 @@ class BaselineCostFunction(CostFunction):
         # Remove duplicates and sort
         indices = sorted(set(indices))
         return indices
+
+
+def remove_future_states(ego_vehicle_world_state, initial_time_step):
+    """
+    检查并删除大于initial_time_step的状态
+    """
+    # 获取所有需要删除的时间步
+    states_list = list(ego_vehicle_world_state.states_cr.values())
+    states_to_remove = [
+        state.time_step
+        for state in states_list
+        if state.time_step > initial_time_step
+    ]
+
+    # 删除每个大于initial_time_step的状态
+    for time_step in states_to_remove:
+        del ego_vehicle_world_state.states_cr[time_step]
+        if time_step in ego_vehicle_world_state.lanelet_assignment:
+            del ego_vehicle_world_state.lanelet_assignment[time_step]
+        if time_step in ego_vehicle_world_state.signal_series:
+            del ego_vehicle_world_state.signal_series[time_step]

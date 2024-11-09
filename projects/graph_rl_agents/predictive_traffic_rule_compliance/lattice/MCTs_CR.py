@@ -184,7 +184,8 @@ class MCTs_CR():
         return [is_goal, cv, s_cv, s_goal]
 
     def planner(self, T):
-        T = 0
+        # Change
+        # T = 0
         planning_problem = self.planning_problem
         scenario = self.scenario
         ln = scenario.lanelet_network

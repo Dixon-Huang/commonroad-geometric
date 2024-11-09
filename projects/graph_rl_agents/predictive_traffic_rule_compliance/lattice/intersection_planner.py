@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+import logging
 from typing import Iterable
 from commonroad.common.file_reader import CommonRoadFileReader
 from commonroad.scenario.lanelet import LaneletNetwork
@@ -34,6 +35,13 @@ from commonroad.visualization.mp_renderer import MPRenderer
 
 '''
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 class Ipaction():
     def __init__(self):
@@ -133,7 +141,7 @@ def front_vehicle_info_extraction(scenario, ego_pos, lanelet_route):
                 front_vehicle['state'] = obs.state_at_time(0)
 
     if len(front_vehicle) == 0:
-        print('no front vehicle')
+        logging.info('no front vehicle')
         front_vehicle['dhw'] = -1
         front_vehicle['v'] = -1
 
