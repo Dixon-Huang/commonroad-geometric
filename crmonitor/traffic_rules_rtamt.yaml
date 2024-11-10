@@ -1,0 +1,58 @@
+# Traffic rules formalized in metric temporal logic (MTL)
+###
+# .. code-block:: yaml
+#
+#   - R_G1: safe distance preceding, considering cut-in vehicles
+#   - R_G2: unnecessary braking only if safe distance is violated
+#   - R_G3: speed limit
+traffic_rules:
+    R_G1: "A a1: ((in_front_of_i__a0_a1 and in_same_lane_i__a0_a1 and !once[0, 3s](cut_in_i__a1_a0 and prev(not cut_in_i__a1_a0))) implies keeps_safe_distance_prec__a0_a1)"
+    R_G2: "brakes_abruptly_i__a0 implies E a1: (precedes__a0_a1 and (not keeps_safe_distance_prec__a0_a1 or not rel_brakes_abruptly_i__a0_a1))"
+    R_G3: "keeps_lane_speed_limit__a0 and keeps_type_speed_limit__a0 and keeps_fov_speed_limit__a0 and keeps_brake_speed_limit__a0"
+
+    R_G4 : "not slow_leading_vehicle_i__a0 implies preserves_traffic_flow__a0"
+
+    R_I1 : "not(in_congestion_i__a0 or exist_standing_leading_vehicle_i__a0) implies not in_standstill__a0"
+    R_I2 : "A a1: (left_of_i__a1_a0 and drives_faster_i__a0_a1 implies ((in_congestion__a1 or in_slow_moving_traffic__a1 or in_queue_of_vehicles__a1) and drives_with_slightly_higher_speed__a0_a1) or (right_of_broad_lane_marking__a0 and left_of_broad_lane_marking__a1) or (on_access_ramp__a0 and on_main_carriage_way__a1 and not (in_congestion__a1 or in_slow_moving_traffic__a1 or in_queue_of_vehicles__a1)))"
+    R_I3 : "not makes_u_turn__a0 and not reverses__a0"
+    R_I4 : "in_congestion_i__a0 or in_slow_moving_traffic_i__a0 implies (interstate_broad_enough__a0 implies not on_shoulder__a0 and (in_leftmost_lane__a0 implies drives_leftmost__a0 and single_lane__a0) and (not in_leftmost_lane__a0 implies drives_rightmost__a0)) and (not interstate_broad_enough__a0 implies drives_rightmost__a0 and in_rightmost_lane__a0 and single_lane__a0)"
+    R_I5: "A a1: ((on_main_carriage_way_i__a0 and in_front_of_i__a0_a1 and on_access_ramp_i__a1 and eventually[0, 5s](on_main_carriage_way__a1)) implies (not(not(main_carriageway_right_lane__a0) and eventually[0, 5s](main_carriageway_right_lane__a0))))"
+
+
+# Parameters for traffic rules
+###
+# .. code-block:: yaml
+#
+#   - a_abrupt: acceleration difference which indicates abrupt braking
+#   - min_velocity_dif: minimum velocity difference
+#   - standstill_error: velocity deviation from zero which is still classified to be standstill
+#   - num_veh_congestion: minimum number of slow-moving leading vehicles so that a vehicle can be assumed to be part of a congestion
+#   - max_congestion_velocity: maximum velocity of a vehicle withing a congestion
+#   - max_velocity_limit_free_driving:
+#   - desired_interstate_velocity: desired velocity on interstates
+#   - min_interstate_width: minimum interstate width so that emergency lane can be created
+#   - close_to_lane_border:  indicator if vehicle is close to lane border
+#   - slightly_higher_speed_difference:  indicator for slightly higher speed
+#   - u_turn: angle [rad] indicating u-turn
+#   - country: countries where traffic rules are applied
+traffic_rules_param:
+    j_abrupt: -2 # for ego vehicle emergency profile calculation
+    a_abrupt: -2
+    standstill_error: 0.01
+    min_velocity_dif: 15
+    num_veh_congestion: 3
+    max_congestion_velocity: 2.78
+    num_veh_slow_moving_traffic: 3
+    max_slow_moving_traffic_velocity: 8.33
+    num_veh_queue_of_vehicles: 3
+    max_queue_of_vehicles_velocity: 3
+    max_velocity_limit_free_driving: 16.67
+    desired_interstate_velocity: 36.11
+    min_interstate_width: 7.0
+    close_to_lane_border: 0.2
+    close_to_other_vehicle: 0.5
+    slightly_higher_speed_difference: 5.55
+    u_turn: 1.57
+    country: "DEU"
+    above_centerline_th: 0.1
+    max_interstate_speed_truck: 22.22

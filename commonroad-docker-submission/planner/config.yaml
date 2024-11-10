@@ -52,7 +52,7 @@ model:
   reactive_planner:
     planning:
       dt: 0.1
-      replanning_frequency: 5 # original 3
+      replanning_frequency: 3 # original 3
       time_steps_computation: 20
 
     vehicle:
@@ -62,10 +62,10 @@ model:
     sampling:
       sampling_method: 1 # original 1
       t_min: 0.4
-      num_sampling_levels: 4 # original 4
+      num_sampling_levels: 3 # original 4
 
     debug:
-      show_plots: True
+      show_plots: False
       save_plots: True
       draw_traj_set: True
       draw_icons: False

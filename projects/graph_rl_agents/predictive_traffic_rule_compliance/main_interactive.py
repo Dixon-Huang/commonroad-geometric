@@ -855,8 +855,8 @@ def main(cfg: RLProjectConfig):
     cfg_obj = OmegaConf.to_object(cfg)
 
     # folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
-    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
-    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
+    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
+    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
 
     # name_scenario = "DEU_Frankfurt-73_2_I-1"
     # name_scenario = "DEU_Frankfurt-95_6_I-1"
@@ -864,7 +864,7 @@ def main(cfg: RLProjectConfig):
 
     # name_scenario = "DEU_Cologne-63_5_I-1"
     # name_scenario = "DEU_Frankfurt-34_11_I-1"
-    name_scenario = "DEU_Aachen-2_1_I-1"
+    # name_scenario = "DEU_Aachen-2_1_I-1"
     # name_scenario = "DEU_Aachen-3_1_I-1"
 
     # name_scenario = "ZAM_Tjunction-1_270_I-1-1"
@@ -875,6 +875,7 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Muc-4_2_I-1-1"
     # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
     # name_scenario = "ZAM_Zip-1_69_I-1-1"
+    name_scenario = "ZAM_Tjunction-1_517_I-1-1"
 
     main_planner = InteractivePlanner()
 
@@ -909,6 +910,12 @@ def main(cfg: RLProjectConfig):
                  ego_vehicles,
                  True,
                  "_planner")
+
+    feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
+                                                                                main_planner.vehicle,
+                                                                                main_planner.dt)
+    global_feasible = copy.deepcopy(feasible)
+    logger.info('Global Feasible? {}'.format(global_feasible))
 
     # try:
     #     while not (global_feasible or global_recon_num > 200):
