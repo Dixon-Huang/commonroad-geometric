@@ -24,6 +24,7 @@ class BaselineCostFunction(CostFunction):
                  simulation=None,
                  traffic_extractor=None,
                  ego_vehicle=None,
+                 speed_limitation=None,
                  robustness_types: Optional[list] = None,
                  ) -> None:
         super(BaselineCostFunction, self).__init__()
@@ -35,11 +36,12 @@ class BaselineCostFunction(CostFunction):
         self.scenario = simulation.current_scenario
         self.ego_vehicle = ego_vehicle
         self.traffic_extractor = traffic_extractor
+        self.speed_limitation = speed_limitation
         # Weights
         self.w_a = 5  # Acceleration weight
         self.w_r = 5  # Robustness weight
         self.w_low_speed = 3  # Low speed weight
-        self.min_desired_speed = 15  # Minimum desired speed
+        self.min_desired_speed = self.speed_limitation if self.speed_limitation else 10  # Minimum desired speed
         # self.base_d_weight = 0.25  # 基础距离权重
         # self.final_d_weight = 20.0  # 终点距离权重
         # self.distance_threshold = 30.0  # 开始增加权重的距离阈值（米）
@@ -75,9 +77,9 @@ class BaselineCostFunction(CostFunction):
         # Since we are minimizing cost, and higher robustness is better,
         # we subtract the robustness from the cost (or equivalently, add negative robustness)
         # Multiply by weight and scaling factor
-        costs -= 1e2 * (np.sum(5 * robustness_array) + \
+        costs -= 1e2 * (np.sum(5 * robustness_array) / len(self.robustness_types) + \
                         (50 * robustness_array[-1]) + \
-                        (100 * robustness_array[int(len(robustness_array) / 2)])) / len(self.robustness_types)
+                        (100 * robustness_array[int(len(robustness_array) / 2)]))
 
         # Other cost calculations
         # Acceleration costs
@@ -102,9 +104,13 @@ class BaselineCostFunction(CostFunction):
                 5 * (np.abs(trajectory.curvilinear.theta[-1]))) ** 2
 
         # low speed costs
-        speed_diff = np.maximum(0, self.min_desired_speed - trajectory.cartesian.v)
-        # costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
-        costs += self.w_low_speed * np.sum(speed_diff ** 2)
+        try:
+            min_speed = np.minimum(self.min_desired_speed, self.desired_speed)
+        except:
+            min_speed = self.min_desired_speed
+        speed_diff = np.maximum(0, min_speed - trajectory.cartesian.v)
+        costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
+        # costs += self.w_low_speed * np.sum(speed_diff ** 2)
 
         epsilon = 1e-6  # 防止除以零
         beta = 2e2  # 静态障碍物权重

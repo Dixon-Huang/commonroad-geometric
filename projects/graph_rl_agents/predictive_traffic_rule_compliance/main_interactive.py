@@ -110,6 +110,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def configure_experiment(cfg: dict) -> RLExperimentConfig:
     experiment_config = RLExperimentConfig(
         simulation_cls=ScenarioSimulation if cfg["enable_traffic"] else UnpopulatedSimulation,
@@ -304,11 +305,11 @@ class InteractivePlanner:
                         incoming_lanelet = ln.find_lanelet_by_id(self.lanelet_ego)
                         end_point = incoming_lanelet.center_vertices[-1]
                         distance = np.linalg.norm(end_point - self.ego_state.position)
-                        if(distance < 10):
-                            self.lanelet_state = 2 #即将进入intersection(距离intersection终点10m以内)
+                        if (distance < 10):
+                            self.lanelet_state = 2  #即将进入intersection(距离intersection终点10m以内)
                             return self.lanelet_state
                         else:
-                            self.lanelet_state = 1 #位于直路
+                            self.lanelet_state = 1  #位于直路
                             return self.lanelet_state
 
                 for laneletid in in_intersection_lanelets:
@@ -464,7 +465,7 @@ class InteractivePlanner:
         try:
 
             for step in range(self.num_of_steps):
-            # for step in range(0, 10):
+                # for step in range(0, 10):
 
                 logger.info(f"process: {step}/{self.num_of_steps}")
                 current_scenario = sumo_sim.commonroad_scenario_at_time_step(sumo_sim.current_time_step)
@@ -497,7 +498,8 @@ class InteractivePlanner:
                                            dt,
                                            lanelets_of_goal_position)
 
-                logger.info(f'next ego position: {next_state.position}, next ego velocity: {next_state.velocity}, next ego orientation: {next_state.orientation}')
+                logger.info(
+                    f'next ego position: {next_state.position}, next ego velocity: {next_state.velocity}, next ego orientation: {next_state.orientation}')
 
                 # ====== paste in simulations
                 # ====== end of motion planner
@@ -541,7 +543,8 @@ class InteractivePlanner:
             dt,
             lanelets_of_goal_position
     ):
-        logger.info(f"ego position: {sumo_ego_vehicle.current_state.position}, ego velocity: {sumo_ego_vehicle.current_state.velocity}, ego orientation: {sumo_ego_vehicle.current_state.orientation}")
+        logger.info(
+            f"ego position: {sumo_ego_vehicle.current_state.position}, ego velocity: {sumo_ego_vehicle.current_state.velocity}, ego orientation: {sumo_ego_vehicle.current_state.orientation}")
 
         planning_problem = list(planning_problem_set.planning_problem_dict.values())[0]
 
@@ -668,6 +671,23 @@ class InteractivePlanner:
             change_planner = True
 
             try:
+                lanelet_network = scenario.lanelet_network
+                current_lanelet = lanelet_network.find_lanelet_by_id(self.lanelet_ego)
+                if current_lanelet.traffic_signs:
+                    speed_limitations = []
+                    for traffic_sign_id in current_lanelet.traffic_signs:
+                        traffic_sign = lanelet_network.find_traffic_sign_by_id(traffic_sign_id)
+                        traffic_sign_element = traffic_sign.traffic_sign_elements[0]
+                        if traffic_sign_element.traffic_sign_element_id.name == 'MAX_SPEED':
+                            speed_limitations.append(float(traffic_sign_element.additional_values[0]))
+                    speed_limitation = min(120, min(speed_limitations))
+                    speed_limitation = speed_limitation / 3.6
+                    logger.info(f"speed limitation: {speed_limitation}")
+            except Exception as e:
+                logger.warning(f"*** get speed limitation failed ***\n"
+                               f"failed reason: {e}")
+
+            try:
                 assert 'position' in planning_problem.goal.state_list[0].__dict__.keys()
 
                 # 判断使用哪个planner
@@ -685,7 +705,7 @@ class InteractivePlanner:
                             change_planner = True
                     except Exception as e:
                         logger.warning(f"*** level_k_planner failed ***\n"
-                              f"failed reason: {e}")
+                                       f"failed reason: {e}")
                         try:
                             self.is_new_action_needed = True
                             ip = IntersectionPlanner(scenario, self.lanelet_route, sumo_ego_vehicle,
@@ -694,7 +714,7 @@ class InteractivePlanner:
                             semantic_action = 4
                             lattice_planner = Lattice_CRv3(scenario, sumo_ego_vehicle)
                             next_states, self.is_new_action_needed = lattice_planner.planner(action,
-                                                                                                        semantic_action)
+                                                                                             semantic_action)
                             self.next_states_queue = self.convert_to_state_list(next_states)
                             next_state = self.next_states_queue.pop(0)
                             self.is_new_action_needed = False
@@ -751,6 +771,7 @@ class InteractivePlanner:
                                                                        simulation=simulation,
                                                                        # traffic_extractor=extractor,
                                                                        ego_vehicle=ego_vehicle,
+                                                                       speed_limitation=speed_limitation if speed_limitation else None
                                                                        ))
 
                     # **************************
@@ -761,17 +782,18 @@ class InteractivePlanner:
 
                     # new planning cycle -> plan a new optimal trajectory
                     if self.is_reach_goal_region:
-                        # desired_velocity = sumo_ego_vehicle.current_state.velocity - 2 if sumo_ego_vehicle.current_state.velocity > 3 else 0
-                        # planner.set_desired_velocity(desired_velocity=desired_velocity, current_speed=planner.x_0.velocity,
-                        #                              stopping=True)
-                        reactive_planner_config.sampling.longitudinal_mode = "stopping"
+                        desired_velocity = sumo_ego_vehicle.current_state.velocity - 4.5 if sumo_ego_vehicle.current_state.velocity > 4.5 else 0
+                        planner.set_desired_velocity(desired_velocity=desired_velocity,
+                                                     current_speed=planner.x_0.velocity,
+                                                     stopping=True)
+                        # reactive_planner_config.sampling.longitudinal_mode = "stopping"
                     else:
                         planner.set_desired_velocity(current_speed=planner.x_0.velocity)
                         try:
                             self.is_reach_goal_region = planner.goal_reached()
                         except Exception as e:
                             logger.warning(f"*** goal_reached failed ***\n"
-                                  f"failed reason: {e}")
+                                           f"failed reason: {e}")
 
                     # plan optimal trajectory
                     optimal = planner.plan()
@@ -807,10 +829,10 @@ class InteractivePlanner:
 
             except Exception as e:
                 logger.warning(f"*** reactive_planner failed *** \n"
-                      f"failed reason: {e}")
+                               f"failed reason: {e}")
                 self.is_new_action_needed = True
                 if self.is_reach_goal_region:
-                    logging.info("use Lattice to break")
+                    logger.info("use Lattice to break")
                     # 直接刹车
                     # next_state = brake(ego_vehicle.current_state, self.goal_info[1], self.goal_info[2])
                     action = brake(self.scenario, sumo_ego_vehicle)
@@ -825,7 +847,7 @@ class InteractivePlanner:
                     return next_state
 
                 if self.is_new_action_needed:
-                    logging.info('use MCTs and Lattice to plan')
+                    logger.info('use MCTs and Lattice to plan')
                     mcts_planner = MCTs_CR(scenario, planning_problem, self.lanelet_route, sumo_ego_vehicle)
                     semantic_action, action, self.goal_info = mcts_planner.planner(time_step)
                     self.is_new_action_needed = False
@@ -872,10 +894,11 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Ffb-2_2_I-1-1"
     # name_scenario = "DEU_A9-2_1_I-1-1"
     # name_scenario = "ZAM_Zip-1_20_I-1-1"
+    name_scenario = "ZAM_Zip-1_69_I-1-1"
     # name_scenario = "DEU_Muc-4_2_I-1-1"
     # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
     # name_scenario = "ZAM_Zip-1_69_I-1-1"
-    name_scenario = "ZAM_Tjunction-1_517_I-1-1"
+    # name_scenario = "ZAM_Tjunction-1_517_I-1-1"
 
     main_planner = InteractivePlanner()
 
