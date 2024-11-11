@@ -33,6 +33,7 @@ class BaselineCostFunction(CostFunction):
         self.desired_d = desired_d
         self.desired_s = desired_s
         self.simulation = simulation
+        self.initial_time_step = copy.deepcopy(self.simulation.current_time_step)
         self.scenario = simulation.current_scenario
         self.ego_vehicle = ego_vehicle
         self.traffic_extractor = traffic_extractor
@@ -54,9 +55,9 @@ class BaselineCostFunction(CostFunction):
             # Default to all the rules you provided
             self.robustness_types = [
                 'R_G1',
-                'R_G2',
-                'R_G3',
-                'R_G4',
+                # 'R_G2',
+                # 'R_G3',
+                # 'R_G4',
                 # 'R_I1',
                 # 'R_I2',
                 # 'R_I3',
@@ -104,10 +105,11 @@ class BaselineCostFunction(CostFunction):
                 5 * (np.abs(trajectory.curvilinear.theta[-1]))) ** 2
 
         # low speed costs
-        try:
-            min_speed = np.minimum(self.min_desired_speed, self.desired_speed)
-        except:
-            min_speed = self.min_desired_speed
+        # try:
+        #     min_speed = np.minimum(self.min_desired_speed, self.desired_speed)
+        # except:
+        #     min_speed = self.min_desired_speed
+        min_speed = self.min_desired_speed - 1
         speed_diff = np.maximum(0, min_speed - trajectory.cartesian.v)
         costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
         # costs += self.w_low_speed * np.sum(speed_diff ** 2)
@@ -132,12 +134,11 @@ class BaselineCostFunction(CostFunction):
 
         # 使用反比例函数计算与动态障碍物的距离成本
         distance_from_dynamic_ob = 0.0
-        initial_time_step = self.simulation.current_time_step
         for ob in self.scenario.dynamic_obstacles:
             if ob.obstacle_id == -1:  # 忽略自车
                 continue
             for current_time_step in range(len(trajectory.cartesian.x)):
-                ob_states = state_at_time(ob, current_time_step + initial_time_step, assume_valid=False)
+                ob_states = state_at_time(ob, current_time_step + self.initial_time_step, assume_valid=False)
                 if ob_states:
                     distance = np.sqrt(
                         (ob_states.position[0] - trajectory.cartesian.x[current_time_step]) ** 2 +
@@ -158,7 +159,7 @@ class BaselineCostFunction(CostFunction):
         self.simulation.lifecycle.run_ego()
         # self.traffic_extractor._simulation = self.simulation
         # 重置world_state的ego_vehicle状态
-        remove_future_states(self.simulation.world_state.vehicle_by_id(-1), self.simulation.current_time_step)
+        remove_future_states(self.simulation.world_state.vehicle_by_id(-1), self.initial_time_step)
 
         return costs
 
@@ -184,7 +185,7 @@ class BaselineCostFunction(CostFunction):
             num_points = len(trajectory.cartesian.x)
             indices = self._get_evaluation_indices(num_points)
             indices_set = set(indices)  # For faster lookup
-            initial_time_step = copy.deepcopy(self.simulation.current_time_step)
+            # initial_time_step = copy.deepcopy(self.simulation.current_time_step)
 
             # Dummy run to initialize the simulation
             for evaluator in rule_evaluators:
@@ -196,7 +197,7 @@ class BaselineCostFunction(CostFunction):
                 orientation = trajectory.cartesian.theta[i + 1]
                 position_center = position_rear + ego_vehicle.parameters.b * np.array(
                     [math.cos(orientation), math.sin(orientation)])
-                time_step = initial_time_step + 1 + i
+                time_step = self.initial_time_step + 1 + i
 
                 state = InitialState(
                     position=position_center,

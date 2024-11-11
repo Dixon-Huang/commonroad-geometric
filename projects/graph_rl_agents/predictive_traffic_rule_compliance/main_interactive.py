@@ -462,74 +462,68 @@ class InteractivePlanner:
 
         logger.info("=" * 50 + " Start Simulation " + "=" * 50)
 
-        try:
+        for step in range(self.num_of_steps):
+            # for step in range(0, 10):
 
-            for step in range(self.num_of_steps):
-                # for step in range(0, 10):
+            logger.info(f"process: {step}/{self.num_of_steps}")
+            current_scenario = sumo_sim.commonroad_scenario_at_time_step(sumo_sim.current_time_step)
+            # sumo_ego_vehicle = list(sumo_ego_vehicles.values())[0]
+            self.ego_state = sumo_ego_vehicle.current_state
 
-                logger.info(f"process: {step}/{self.num_of_steps}")
-                current_scenario = sumo_sim.commonroad_scenario_at_time_step(sumo_sim.current_time_step)
-                # sumo_ego_vehicle = list(sumo_ego_vehicles.values())[0]
-                self.ego_state = sumo_ego_vehicle.current_state
+            # initial positions do not match
+            planning_problem.initial_state.position = copy.deepcopy(sumo_ego_vehicle.current_state.position)
+            planning_problem.initial_state.orientation = copy.deepcopy(sumo_ego_vehicle.current_state.orientation)
+            planning_problem.initial_state.velocity = copy.deepcopy(sumo_ego_vehicle.current_state.velocity)
+            planning_problem.initial_state.acceleration = copy.deepcopy(sumo_ego_vehicle.current_state.acceleration)
+            planning_problem.initial_state.time_step = sumo_sim.current_time_step
+            # ====== plug in your motion planner here
+            # ====== paste in simulations
 
-                # initial positions do not match
-                planning_problem.initial_state.position = copy.deepcopy(sumo_ego_vehicle.current_state.position)
-                planning_problem.initial_state.orientation = copy.deepcopy(sumo_ego_vehicle.current_state.orientation)
-                planning_problem.initial_state.velocity = copy.deepcopy(sumo_ego_vehicle.current_state.velocity)
-                planning_problem.initial_state.acceleration = copy.deepcopy(sumo_ego_vehicle.current_state.acceleration)
-                planning_problem.initial_state.time_step = sumo_sim.current_time_step
-                # ====== plug in your motion planner here
-                # ====== paste in simulations
+            # self.t_record += 0.1
+            # if self.t_record > 1 and (self.last_semantic_action is None or self.last_semantic_action not in {1, 2}):
+            #     self.is_new_action_needed = True
+            #     logger.info('force to get a new action during straight-going')
+            #     self.t_record = 0
 
-                # self.t_record += 0.1
-                # if self.t_record > 1 and (self.last_semantic_action is None or self.last_semantic_action not in {1, 2}):
-                #     self.is_new_action_needed = True
-                #     logger.info('force to get a new action during straight-going')
-                #     self.t_record = 0
+            # generate a CR planner
+            next_state = self.planning(copy.deepcopy(current_scenario),
+                                       planning_problem_set,
+                                       sumo_ego_vehicle,
+                                       sumo_sim.current_time_step,
+                                       reactive_planner_config,
+                                       simulation_options,
+                                       # extractor_factory,
+                                       dt,
+                                       lanelets_of_goal_position)
 
-                # generate a CR planner
-                next_state = self.planning(copy.deepcopy(current_scenario),
-                                           planning_problem_set,
-                                           sumo_ego_vehicle,
-                                           sumo_sim.current_time_step,
-                                           reactive_planner_config,
-                                           simulation_options,
-                                           # extractor_factory,
-                                           dt,
-                                           lanelets_of_goal_position)
+            logger.info(
+                f'next ego position: {next_state.position}, next ego velocity: {next_state.velocity}, next ego orientation: {next_state.orientation}')
 
-                logger.info(
-                    f'next ego position: {next_state.position}, next ego velocity: {next_state.velocity}, next ego orientation: {next_state.orientation}')
+            # ====== paste in simulations
+            # ====== end of motion planner
+            next_state.time_step = 1
+            next_state.steering_angle = 0.0
+            trajectory_ego = [next_state]
+            sumo_ego_vehicle.set_planned_trajectory(trajectory_ego)
 
-                # ====== paste in simulations
-                # ====== end of motion planner
-                next_state.time_step = 1
-                next_state.steering_angle = 0.0
-                trajectory_ego = [next_state]
-                sumo_ego_vehicle.set_planned_trajectory(trajectory_ego)
+            sumo_sim.simulate_step()
+            logger.info("=" * 120)
 
-                sumo_sim.simulate_step()
-                logger.info("=" * 120)
+        # retrieve the simulated scenario in CR format
+        simulated_scenario = sumo_sim.commonroad_scenarios_all_time_steps()
 
-        except Exception as e:
-            logger.error(f"Error: {e}")
+        # stop the simulation
+        sumo_sim.stop()
 
-        finally:
-            # retrieve the simulated scenario in CR format
-            simulated_scenario = sumo_sim.commonroad_scenarios_all_time_steps()
+        # match pp_id
+        ego_vehicles = {list(self.planning_problem_set.planning_problem_dict.keys())[0]:
+                            ego_v for _, ego_v in sumo_sim.ego_vehicles.items()}
 
-            # stop the simulation
-            sumo_sim.stop()
+        for pp_id, planning_problem in self.planning_problem_set.planning_problem_dict.items():
+            obstacle_ego = ego_vehicles[pp_id].get_dynamic_obstacle()
+            simulated_scenario.add_objects(obstacle_ego)
 
-            # match pp_id
-            ego_vehicles = {list(self.planning_problem_set.planning_problem_dict.keys())[0]:
-                                ego_v for _, ego_v in sumo_sim.ego_vehicles.items()}
-
-            for pp_id, planning_problem in self.planning_problem_set.planning_problem_dict.items():
-                obstacle_ego = ego_vehicles[pp_id].get_dynamic_obstacle()
-                simulated_scenario.add_objects(obstacle_ego)
-
-            return simulated_scenario, ego_vehicles
+        return simulated_scenario, ego_vehicles
 
     def planning(
             self,
@@ -617,34 +611,34 @@ class InteractivePlanner:
             # rnd.render()
             # plt.show()
 
-            # too close to front car, start to car-following
-            if not (front_veh_info['dhw'] == -1 or time_step == 0 or self.ego_state.velocity == 0) and self.last_action:
-                ttc = (front_veh_info['dhw'] - 5) / (self.ego_state.velocity - front_veh_info['v'])
-                if 0 < ttc < 5 or front_veh_info['dhw'] < 20:
-                    logger.info('ttc: ' + str(ttc))
-                    logger.info('too close to front car, start to car-following')
-                    action_temp = copy.deepcopy(action)
-                    # IDM
-                    s_t = 2 + max([0, self.ego_state.velocity * 1.5 - self.ego_state.velocity * (
-                            self.ego_state.velocity - front_veh_info['v']) / 2 / (7 * 2) ** 0.5])
-                    acc = max(7 * (1 - (self.ego_state.velocity /
-                                        60 * 3.6) ** 5 - (s_t / (front_veh_info['dhw'] - 5)) ** 2), -7)
-                    if acc > 5:
-                        acc = 5
-                    action_temp.T = 5
-                    action_temp.v_end = self.ego_state.velocity + action_temp.T * acc
-                    if action_temp.v_end < 0:
-                        action_temp.v_end = 0
-                    action_temp.delta_s = self.ego_state.velocity * 5 + 0.5 * acc * action_temp.T ** 2
-                    action = action_temp
-
-                    lattice_planner = Lattice_CRv3(scenario, sumo_ego_vehicle)
-                    next_states_queue_temp, self.is_new_action_needed = lattice_planner.planner(action, semantic_action)
-                    next_states = next_states_queue_temp[0: 4]
-                    self.next_states_queue = self.convert_to_state_list(next_states)
-                    next_state = self.next_states_queue.pop(0)
-                    self.is_new_action_needed = True
-                    return next_state
+            # # too close to front car, start to car-following
+            # if not (front_veh_info['dhw'] == -1 or time_step == 0 or self.ego_state.velocity == 0) and self.last_action:
+            #     ttc = (front_veh_info['dhw'] - 5) / (self.ego_state.velocity - front_veh_info['v'])
+            #     if 0 < ttc < 5 or front_veh_info['dhw'] < 20:
+            #         logger.info('ttc: ' + str(ttc))
+            #         logger.info('too close to front car, start to car-following')
+            #         action_temp = copy.deepcopy(action)
+            #         # IDM
+            #         s_t = 2 + max([0, self.ego_state.velocity * 1.5 - self.ego_state.velocity * (
+            #                 self.ego_state.velocity - front_veh_info['v']) / 2 / (7 * 2) ** 0.5])
+            #         acc = max(7 * (1 - (self.ego_state.velocity /
+            #                             60 * 3.6) ** 5 - (s_t / (front_veh_info['dhw'] - 5)) ** 2), -7)
+            #         if acc > 5:
+            #             acc = 5
+            #         action_temp.T = 5
+            #         action_temp.v_end = self.ego_state.velocity + action_temp.T * acc
+            #         if action_temp.v_end < 0:
+            #             action_temp.v_end = 0
+            #         action_temp.delta_s = self.ego_state.velocity * 5 + 0.5 * acc * action_temp.T ** 2
+            #         action = action_temp
+            #
+            #         lattice_planner = Lattice_CRv3(scenario, sumo_ego_vehicle)
+            #         next_states_queue_temp, self.is_new_action_needed = lattice_planner.planner(action, semantic_action)
+            #         next_states = next_states_queue_temp[0: 4]
+            #         self.next_states_queue = self.convert_to_state_list(next_states)
+            #         next_state = self.next_states_queue.pop(0)
+            #         self.is_new_action_needed = True
+            #         return next_state
 
             # ego vehicle state
             ego_state = sumo_ego_vehicle.current_state
@@ -659,17 +653,7 @@ class InteractivePlanner:
             # 设置ego初始状态
             ego_vehicle.reset(initial_state=ego_state)
 
-            # # 检查当前自车所在位置   1. 直路lanelet, 2. 即将进入intersection(距离intersection终点10m以内), 3. 位于intersection中
-            # self.last_state = copy.deepcopy(self.lanelet_state)
-            # self.check_state()
-            # logger.info(f"intersection_state: {self.lanelet_state}")
-            # change_planner = True
-
-            self.last_state = copy.deepcopy(self.lanelet_state)
-            self.lanelet_state = self.check_state()
-            logger.info(f"intersection_state: {self.lanelet_state}")
-            change_planner = True
-
+            speed_limitation = None
             try:
                 lanelet_network = scenario.lanelet_network
                 current_lanelet = lanelet_network.find_lanelet_by_id(self.lanelet_ego)
@@ -680,12 +664,23 @@ class InteractivePlanner:
                         traffic_sign_element = traffic_sign.traffic_sign_elements[0]
                         if traffic_sign_element.traffic_sign_element_id.name == 'MAX_SPEED':
                             speed_limitations.append(float(traffic_sign_element.additional_values[0]))
-                    speed_limitation = min(120, min(speed_limitations))
-                    speed_limitation = speed_limitation / 3.6
+                    speed_limitation = min(33, min(speed_limitations))
+                    speed_limitation = speed_limitation
                     logger.info(f"speed limitation: {speed_limitation}")
             except Exception as e:
                 logger.warning(f"*** get speed limitation failed ***\n"
                                f"failed reason: {e}")
+
+            # # 检查当前自车所在位置   1. 直路lanelet, 2. 即将进入intersection(距离intersection终点10m以内), 3. 位于intersection中
+            # self.last_state = copy.deepcopy(self.lanelet_state)
+            # self.check_state()
+            # logger.info(f"intersection_state: {self.lanelet_state}")
+            # change_planner = True
+
+            self.last_state = copy.deepcopy(self.lanelet_state)
+            self.lanelet_state = self.check_state()
+            logger.info(f"intersection_state: {self.lanelet_state}")
+            change_planner = True
 
             try:
                 assert 'position' in planning_problem.goal.state_list[0].__dict__.keys()
@@ -893,12 +888,13 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "ZAM_Tjunction-1_517_I-1-1"
     # name_scenario = "DEU_Ffb-2_2_I-1-1"
     # name_scenario = "DEU_A9-2_1_I-1-1"
-    # name_scenario = "ZAM_Zip-1_20_I-1-1"
-    name_scenario = "ZAM_Zip-1_69_I-1-1"
+    # name_scenario = "ZAM_Zip-1_7_I-1-1"
+    name_scenario = "ZAM_Tjunction-1_258_I-1-1"
     # name_scenario = "DEU_Muc-4_2_I-1-1"
     # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
     # name_scenario = "ZAM_Zip-1_69_I-1-1"
-    # name_scenario = "ZAM_Tjunction-1_517_I-1-1"
+    # name_scenario = "ZAM_ACC-1_3_I-1-1"
+    # name_scenario = "DEU_A9-1_2_I-1-1"
 
     main_planner = InteractivePlanner()
 
@@ -934,11 +930,42 @@ def main(cfg: RLProjectConfig):
                  True,
                  "_planner")
 
-    feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
-                                                                                main_planner.vehicle,
-                                                                                main_planner.dt)
-    global_feasible = copy.deepcopy(feasible)
-    logger.info('Global Feasible? {}'.format(global_feasible))
+    try:
+        feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
+                                                                                    main_planner.vehicle,
+                                                                                    main_planner.dt)
+        global_feasible = copy.deepcopy(feasible)
+        logger.info('Global Feasible? {}'.format(global_feasible))
+        logger.info(f"{len(reconstructed_inputs.state_list)} states reconstructed")
+        global_recon_num += 1
+        recon_num = 0
+        while not (feasible or recon_num >= 5):
+            recon_num += 1
+            # if not feasible. reconstruct the inputs
+            initial_state = trajectory.state_list[0]
+            vehicle = VehicleDynamics.KS(VehicleType.FORD_ESCORT)
+            dt = 0.1
+            reconstructed_states = [vehicle.convert_initial_state(initial_state)] + [
+                vehicle.simulate_next_state(trajectory.state_list[idx], inp, dt)
+                for idx, inp in enumerate(reconstructed_inputs.state_list)
+            ]
+            trajectory_reconstructed = Trajectory(initial_time_step=0, state_list=reconstructed_states)
+
+            for i, state in enumerate(trajectory_reconstructed.state_list):
+                # ego_vehicle.driven_trajectory.trajectory.state_list[i] = state
+                target_states = [state for state in ego_vehicle.driven_trajectory.trajectory.state_list if state.time_step == i]
+                if target_states:
+                    target_state = target_states[0]
+                    target_state.position = state.position
+                    target_state.steering_angle = state.steering_angle
+                    target_state.velocity = state.velocity
+                    target_state.orientation = state.orientation
+            feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory_reconstructed,
+                                                                                        main_planner.vehicle,
+                                                                                        main_planner.dt)
+            logger.info('after recon, Local Feasible? {}'.format(feasible))
+    except Exception as e:
+        logger.warning(e)
 
     # try:
     #     while not (global_feasible or global_recon_num > 200):
@@ -993,7 +1020,7 @@ def main(cfg: RLProjectConfig):
                   path_solutions, overwrite=True)
 
     solution = CommonRoadSolutionReader.open(os.path.join(path_solutions,
-                                                          f"solution_KS1:TR1:{name_scenario}:2020a.xml"))
+                                                          f"solution_KS1:TR1:{main_planner.scenario.scenario_id}:2020a.xml"))
     try:
         res = valid_solution(main_planner.scenario, main_planner.planning_problem_set, solution)
         logger.info(res)
@@ -1016,19 +1043,26 @@ def motion_planner_interactive(scenario_path: str, cfg: RLProjectConfig) -> Solu
     sumo_sim = main_planner.initialize(folder_scenarios, name_scenario)
     simulated_scenario, ego_vehicles = main_planner.process(sumo_sim, cfg_obj)
 
+
     # get feasible trajectory
     ego_vehicle = list(ego_vehicles.values())[0]
     trajectory = ego_vehicle.driven_trajectory.trajectory
+
+    for state in trajectory.state_list:
+        state.yaw_rate = 0
+
     # global_feasible = False
     # global_recon_num = 0
-    # while not (global_feasible or global_recon_num > 200):
+    # try:
     #     feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
     #                                                                                 main_planner.vehicle,
     #                                                                                 main_planner.dt)
     #     global_feasible = copy.deepcopy(feasible)
     #     logger.info('Global Feasible? {}'.format(global_feasible))
+    #     logger.info(f"{len(reconstructed_inputs.state_list)} states reconstructed")
+    #     # global_recon_num += 1
     #     recon_num = 0
-    #     while not (feasible or recon_num >= 3):
+    #     while not (feasible or recon_num >= 5):
     #         recon_num += 1
     #         # if not feasible. reconstruct the inputs
     #         initial_state = trajectory.state_list[0]
@@ -1042,8 +1076,7 @@ def motion_planner_interactive(scenario_path: str, cfg: RLProjectConfig) -> Solu
     #
     #         for i, state in enumerate(trajectory_reconstructed.state_list):
     #             # ego_vehicle.driven_trajectory.trajectory.state_list[i] = state
-    #             target_states = [state for state in ego_vehicle.driven_trajectory.trajectory.state_list if
-    #                              state.time_step == i]
+    #             target_states = [state for state in ego_vehicle.driven_trajectory.trajectory.state_list if state.time_step == i]
     #             if target_states:
     #                 target_state = target_states[0]
     #                 target_state.position = state.position
@@ -1054,7 +1087,8 @@ def motion_planner_interactive(scenario_path: str, cfg: RLProjectConfig) -> Solu
     #                                                                                     main_planner.vehicle,
     #                                                                                     main_planner.dt)
     #         logger.info('after recon, Local Feasible? {}'.format(feasible))
-
+    # except Exception as e:
+    #     logger.warning(e)
     # create solution object for benchmark
     planning_problem_set = main_planner.planning_problem_set
     vehicle_type = main_planner.vehicle_type

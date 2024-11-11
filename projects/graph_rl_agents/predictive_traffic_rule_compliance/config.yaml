@@ -52,7 +52,7 @@ model:
   reactive_planner:
     planning:
       dt: 0.1
-      replanning_frequency: 3 # original 3
+      replanning_frequency: 10 # original 3
       time_steps_computation: 20
 
     vehicle:
@@ -66,7 +66,7 @@ model:
 
     debug:
       show_plots: False
-      save_plots: True
+      save_plots: False
       draw_traj_set: True
       draw_icons: False
       multiproc: False # original True
