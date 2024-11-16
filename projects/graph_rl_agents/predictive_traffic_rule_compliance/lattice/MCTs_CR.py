@@ -116,7 +116,7 @@ class MCTs_CR():
             else:
                 break
        
-                # 从自车道一直往右遍历相邻车道
+        # 从自车道一直往右遍历相邻车道
         tmp_lanelet = lanelet_ego
         while tmp_lanelet.adj_right is not None:
             if tmp_lanelet.adj_right_same_direction:  # 行驶方向相同
@@ -126,7 +126,7 @@ class MCTs_CR():
             else:
                 break
 
-                # 2. 找自车最相近的lanelet_id
+        # 2. 找自车最相近的lanelet_id
         start_lanelet_id = None
 
         if lanelet_id_ego in self.lanelet_route:
@@ -137,7 +137,7 @@ class MCTs_CR():
                 if lanelet_id_adj in self.lanelet_route:
                     start_lanelet_id = lanelet_id_adj
 
-                    # cannot cut the lanelet route
+        # cannot cut the lanelet route
         assert start_lanelet_id is not None
         start_route_id = self.lanelet_route.index(start_lanelet_id)
 

@@ -638,7 +638,7 @@ class ReactivePlanner(object):
             # logger.info(f"Total checking time: {time.time() - t0:.7f}")
             logger.info(f"Rejected {self.infeasible_count_kinematics} infeasible trajectories due to kinematics")
             for constraint in self.config.planning.constraints_to_check:
-                logger.debug(f"\tInfeasible {constraint}: {self._infeasible_reason_dict[constraint]}")
+                logger.info(f"\tInfeasible {constraint}: {self._infeasible_reason_dict[constraint]}")
             logger.info(f"Rejected {self.infeasible_count_collision} infeasible trajectories due to collisions")
 
             if current_sampling_level is not None:
@@ -658,10 +658,14 @@ class ReactivePlanner(object):
                 self._optimal_cost = optimal_trajectory.cost
                 relative_costs = None
                 if bundle is not None:
-                    relative_costs = ((optimal_trajectory.cost - bundle.min_costs().cost) /
-                                      (bundle.max_costs().cost - bundle.min_costs().cost))
-                logger.info(f"Found optimal trajectory with costs = {self._optimal_cost:.3f} "
-                            f"({relative_costs:.3f} of seen costs)")
+                    # Change: 加上了低速情况下，处理有的trajectory会为None的情况
+                    try:
+                        relative_costs = ((optimal_trajectory.cost - bundle.min_costs().cost) /
+                                          (bundle.max_costs().cost - bundle.min_costs().cost))
+                    except:
+                        relative_costs = None
+                relative_costs_str = f"({relative_costs:.3f} of seen costs)" if relative_costs is not None else "(relative costs unknown)"
+                logger.info(f"Found optimal trajectory with costs = {self._optimal_cost:.3f} {relative_costs_str}")
 
         # compute output
         planning_result = self._compute_trajectory_pair(optimal_trajectory) if optimal_trajectory is not None else None
@@ -815,7 +819,9 @@ class ReactivePlanner(object):
                     feasible = False
                     continue
 
-            for i in range(0, traj_len):
+            #Change: 仅计算前10个点
+            # for i in range(0, traj_len):
+            for i in range(10):
                 # compute orientations
                 # see Appendix A.1 of Moritz Werling's PhD Thesis for equations
                 if not self._low_vel_mode:
@@ -979,53 +985,54 @@ class ReactivePlanner(object):
         else:
             return feasible_trajectories, infeasible_trajectories
 
-    def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray, i: int) \
-            -> bool:
-        """
-        Checks kinematic constraints for a sampled trajectory at time index i
-        Constraints which should be checked can be specified in config.planning.constraints_to_check
-        :return: Boolean stating feasibility for the given constraint set
-        """
-        # velocity constraint
-        if "velocity" in self.config.planning.constraints_to_check:
-            if v[i] < -_EPS:
-                self._infeasible_reason_dict["velocity"] += 1
-                return False
-
-        # curvature constraint
-        kappa_max = np.tan(self.vehicle_params.delta_max) / self.vehicle_params.wheelbase
-        if "kappa" in self.config.planning.constraints_to_check:
-            if abs(kappa_gl[i]) > kappa_max:
-                self._infeasible_reason_dict["kappa"] += 1
-                return False
-
-        # yaw rate (orientation change) constraint
-        if "yaw_rate" in self.config.planning.constraints_to_check:
-            yaw_rate = (theta_gl[i] - theta_gl[i - 1]) / self.dt if i > 0 else 0.
-            theta_dot_max = kappa_max * v[i]
-            if abs(round(yaw_rate, 5)) > theta_dot_max:
-                self._infeasible_reason_dict["yaw_rate"] += 1
-                return False
-
-        # curvature rate constraint
-        if "kappa_dot" in self.config.planning.constraints_to_check:
-            steering_angle = np.arctan2(self.vehicle_params.wheelbase * kappa_gl[i], 1.0)
-            kappa_dot_max = self.vehicle_params.v_delta_max / (self.vehicle_params.wheelbase *
-                                                               math.cos(steering_angle) ** 2)
-            kappa_dot = (kappa_gl[i] - kappa_gl[i - 1]) / self.dt if i > 0 else 0.
-            if abs(kappa_dot) > kappa_dot_max:
-                self._infeasible_reason_dict["kappa_dot"] += 1
-                return False
-
-        # acceleration constraint (considering switching velocity, see vehicle models documentation)
-        if "acceleration" in self.config.planning.constraints_to_check:
-            v_switch = self.vehicle_params.v_switch
-            a_max = self.vehicle_params.a_max * v_switch / v[i] if v[i] > v_switch else self.vehicle_params.a_max
-            a_min = -self.vehicle_params.a_max
-            if not a_min <= a[i] <= a_max:
-                self._infeasible_reason_dict["acceleration"] += 1
-                return False
-        return True
+    # def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray, i: int) \
+    #         -> bool:
+    #     """
+    #     Checks kinematic constraints for a sampled trajectory at time index i
+    #     Constraints which should be checked can be specified in config.planning.constraints_to_check
+    #     :return: Boolean stating feasibility for the given constraint set
+    #     """
+    #     # velocity constraint
+    #
+    #     if "velocity" in self.config.planning.constraints_to_check:
+    #         if v[i] < -_EPS:
+    #             self._infeasible_reason_dict["velocity"] += 1
+    #             return False
+    #
+    #     # curvature constraint
+    #     kappa_max = np.tan(self.vehicle_params.delta_max) / self.vehicle_params.wheelbase
+    #     if "kappa" in self.config.planning.constraints_to_check:
+    #         if abs(kappa_gl[i]) > kappa_max:
+    #             self._infeasible_reason_dict["kappa"] += 1
+    #             return False
+    #
+    #     # yaw rate (orientation change) constraint
+    #     if "yaw_rate" in self.config.planning.constraints_to_check:
+    #         yaw_rate = (theta_gl[i] - theta_gl[i - 1]) / self.dt if i > 0 else 0.
+    #         theta_dot_max = kappa_max * v[i]
+    #         if abs(round(yaw_rate, 5)) > theta_dot_max:
+    #             self._infeasible_reason_dict["yaw_rate"] += 1
+    #             return False
+    #
+    #     # curvature rate constraint
+    #     if "kappa_dot" in self.config.planning.constraints_to_check:
+    #         steering_angle = np.arctan2(self.vehicle_params.wheelbase * kappa_gl[i], 1.0)
+    #         kappa_dot_max = self.vehicle_params.v_delta_max / (self.vehicle_params.wheelbase *
+    #                                                            math.cos(steering_angle) ** 2)
+    #         kappa_dot = (kappa_gl[i] - kappa_gl[i - 1]) / self.dt if i > 0 else 0.
+    #         if abs(kappa_dot) > kappa_dot_max:
+    #             self._infeasible_reason_dict["kappa_dot"] += 1
+    #             return False
+    #
+    #     # acceleration constraint (considering switching velocity, see vehicle models documentation)
+    #     if "acceleration" in self.config.planning.constraints_to_check:
+    #         v_switch = self.vehicle_params.v_switch
+    #         a_max = self.vehicle_params.a_max * v_switch / v[i] if v[i] > v_switch else self.vehicle_params.a_max
+    #         a_min = -self.vehicle_params.a_max
+    #         if not a_min <= a[i] <= a_max:
+    #             self._infeasible_reason_dict["acceleration"] += 1
+    #             return False
+    #     return True
 
     def _check_collisions(self, trajectory_bundle: TrajectoryBundle) -> Union[TrajectorySample, None]:
         """
@@ -1133,55 +1140,78 @@ class ReactivePlanner(object):
         if self._draw_traj_set:
             self.stored_trajectories = feasible_trajectories + infeasible_trajectories
 
-        # set feasible trajectories in bundle
-        trajectory_bundle.trajectories = feasible_trajectories
-
-        # ==== Sorting
-        # sort trajectories according to their costs
-        t0 = time.time()
-        trajectory_bundle.sort()
-        logger.info(f"Sort trajectories took:  \t{time.time() - t0:.7f}s")
-
-        # ==== Collision checking
-        collision_free_trajectory: Optional[TrajectorySample] = self._check_collisions(trajectory_bundle)
-        return collision_free_trajectory
-
+        # Change: 先进行collision check
+        # # set feasible trajectories in bundle
+        # trajectory_bundle.trajectories = feasible_trajectories
+        #
+        # # ==== Sorting
+        # # sort trajectories according to their costs
         # t0 = time.time()
-        # if self.config.debug.multiproc:
-        #     # 使用多进程
-        #     chunk_size = math.ceil(len(trajectory_bundle.trajectories) / self.config.debug.num_workers)
-        #     chunks = [trajectory_bundle.trajectories[ii * chunk_size: min(len(trajectory_bundle.trajectories), (ii + 1) * chunk_size)] for ii in range(0, self.config.debug.num_workers)]
-        #
-        #     list_processes = []
-        #     queue = multiprocessing.Queue()
-        #     for chunk in chunks:
-        #         p = Process(target=self._calculate_costs_parallel, args=(chunk, queue))
-        #         list_processes.append(p)
-        #         p.start()
-        #
-        #     all_costs = []
-        #     for _ in list_processes:
-        #         all_costs.extend(queue.get())
-        #
-        #     for p in list_processes:
-        #         p.join()
-        #
-        #     # 基于成本排序
-        #     all_costs.sort(key=lambda x: x[1])
-        #     trajectory_bundle.trajectories = [item[0] for item in all_costs]
-        # else:
-        #     # 不使用多进程
-        #     for trajectory in trajectory_bundle.trajectories:
-        #         # 使用 cost 属性的 setter 来设置 cost_function
-        #         trajectory.cost = self.cost_function
-        #     trajectory_bundle.trajectories.sort(key=lambda x: x.cost)
-        #
-        # trajectory_bundle._is_sorted = True
-        # logger.info(f"成本计算和排序耗时：\t{time.time() - t0:.7f}s")
+        # trajectory_bundle.sort()
+        # logger.info(f"Sort trajectories took:  \t{time.time() - t0:.7f}s")
         #
         # # ==== Collision checking
         # collision_free_trajectory: Optional[TrajectorySample] = self._check_collisions(trajectory_bundle)
         # return collision_free_trajectory
+
+        # ==== Collision checking
+        t0 = time.time()
+        collision_free_trajectories = []
+
+        # collision object dimensions
+        half_length = 0.5 * self.vehicle_params.length
+        half_width = 0.5 * self.vehicle_params.width
+
+        # check each kinematically feasible trajectory for collisions
+        for trajectory in feasible_trajectories:
+            # compute position and orientation
+            pos1 = trajectory.cartesian.x + self.vehicle_params.wb_rear_axle * np.cos(trajectory.cartesian.theta)
+            pos2 = trajectory.cartesian.y + self.vehicle_params.wb_rear_axle * np.sin(trajectory.cartesian.theta)
+            theta = trajectory.cartesian.theta
+
+            collide = False
+            # check each pose for collisions
+
+            # Change: 对于简单的轨迹预测，只检查前10个点
+            # for i in range(len(pos1)):
+            for i in range(0, 5):
+                ego = pycrcc.TimeVariantCollisionObject(self.x_0.time_step + i * self.config.planning.factor)
+                ego.append_obstacle(pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i]))
+                if self._cc.collide(ego):
+                    self._infeasible_count_collision += 1
+                    collide = True
+                    trajectory.feasibility_label = FeasibilityStatus.INFEASIBLE_COLLISION
+                    break
+
+            # # additional continuous collision check if no collision has been detected before already
+            # if self.config.planning.continuous_collision_check and not collide:
+            #     ego_tvo = pycrcc.TimeVariantCollisionObject(self.x_0.time_step)
+            #     [ego_tvo.append_obstacle(
+            #         pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(len(pos1))]
+            #     ego_tvo, err = trajectory_preprocess_obb_sum(ego_tvo)
+            #     if self._cc.collide(ego_tvo):
+            #         self._infeasible_count_collision += 1
+            #         collide = True
+            #         trajectory.feasibility_label = FeasibilityStatus.INFEASIBLE_COLLISION
+
+            if not collide:
+                collision_free_trajectories.append(trajectory)
+
+        logger.info(f"Collision checks took:  \t{time.time() - t0:.7f}s")
+
+        if not collision_free_trajectories:
+            return None
+
+        # ==== Cost calculation and sorting
+        t0 = time.time()
+        # Create a new trajectory bundle with only collision-free trajectories
+        collision_free_bundle = TrajectoryBundle(collision_free_trajectories, cost_function=self.cost_function)
+        collision_free_bundle.sort()
+        logger.info(f"Sort trajectories took:  \t{time.time() - t0:.7f}s")
+
+        # Return the trajectory with minimum cost
+        return collision_free_bundle.min_costs()
+
 
     def convert_state_list_to_commonroad_object(self, state_list: List[ReactivePlannerState], obstacle_id: int = 42):
         """
@@ -1221,3 +1251,220 @@ class ReactivePlanner(object):
             trajectory.cost = cost
             costs.append((trajectory, cost))
         queue.put(costs)
+
+    # Change: 实现弯道减速
+    def find_current_index(self) -> int:
+        """找到当前位置在参考路径上的索引"""
+        current_s = self._compute_initial_states(self.x_0)[0][0]  # 从curvilinear状态中获取当前s值
+        return np.argmax(self._co.ref_pos > current_s) - 1
+
+    def analyze_upcoming_curvature(self, current_index: int, lookahead_distance: int = 20) -> Tuple[float, int]:
+        """
+        分析前方路径的曲率情况
+        Args:
+            current_index: 当前位置索引
+            lookahead_distance: 前瞻点数
+        Returns:
+            max_curvature: 最大曲率值
+            distance_to_curve: 到达该曲率点的距离(参考路径点的个数)
+        """
+        end_index = min(current_index + lookahead_distance, len(self._co.ref_curv))
+        upcoming_curvatures = np.abs(self._co.ref_curv[current_index:end_index])
+
+        if len(upcoming_curvatures) == 0:
+            return 0.0, 0
+
+        max_curvature = np.max(upcoming_curvatures)
+        if max_curvature < 0.01:  # 曲率阈值,可调
+            return 0.0, 0
+
+        # 找到最大曲率点的距离
+        max_curv_local_idx = np.argmax(upcoming_curvatures)
+        distance_to_curve = max_curv_local_idx
+
+        return max_curvature, distance_to_curve
+
+    def calculate_safe_speed(self, curvature: float,
+                             current_velocity: float,
+                             max_lateral_acc: float = 2) -> float:
+        """
+        基于曲率计算安全速度
+        Args:
+            curvature: 曲率
+            current_velocity: 当前速度
+            max_lateral_acc: 最大允许横向加速度(m/s^2)
+        Returns:
+            safe_speed: 安全速度(m/s)
+        """
+        if abs(curvature) < 0.01:
+            return float('inf')
+
+        # v^2 * curvature = lateral_acc
+        safe_speed = math.sqrt(max_lateral_acc / abs(curvature))
+
+        # 添加缓冲区
+        safe_speed *= 0.9  # 留10%的余量
+
+        return safe_speed
+
+    def calculate_braking_distance(self, current_speed: float,
+                                   target_speed: float,
+                                   comfortable_decel: float = 1.5) -> float:
+        """
+        计算舒适减速所需距离
+        """
+        if current_speed <= target_speed:
+            return 0.0
+
+        # 舒适减速度(比最大减速度小)
+        decel = min(comfortable_decel, self.vehicle_params.a_max * 0.7)
+
+        # 计算减速距离
+        braking_distance = (current_speed ** 2 - target_speed ** 2) / (2 * decel)
+
+        # 添加安全余量(1秒车头时距)
+        safety_margin = current_speed * self.config.planning.time_steps_computation / 2
+
+        return braking_distance + safety_margin
+
+    def set_desired_curve_velocity(self, desired_velocity: float = None,
+                             current_speed: float = None,
+                             stopping: bool = False):
+        """增加曲率预见性减速"""
+
+        if not stopping:
+            # 获取当前位置
+            current_index = self.find_current_index()
+
+            # 分析前方曲率
+            max_curvature, distance_to_curve = self.analyze_upcoming_curvature(current_index)
+
+            if max_curvature > 0:
+                # 计算安全速度
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=1.5)
+
+                # 计算需要的减速距离
+                braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
+
+                # 获取到弯道的实际距离
+                actual_distance = self._co.ref_pos[current_index + distance_to_curve] - self._co.ref_pos[current_index]
+
+                # 如果在减速距离内发现弯道,降低目标速度
+                if actual_distance < braking_distance:
+                    desired_velocity = safe_speed
+                    logger.info(f"Curve ahead! Reducing target speed to {safe_speed:.2f} m/s")
+
+                if actual_distance < self.config.planning.time_steps_computation * self.dt * safe_speed * 3:
+                    self.cost_function.w_velocity = 1e2
+                    self.cost_function.w_low_speed = 0
+                    desired_velocity = safe_speed
+                    logger.info(f"Ignoring low speed cost function")
+
+                logger.info(f"Max curvature: {max_curvature:.2f}")
+                logger.info(f"Distance to curve: {actual_distance:.2f} m")
+
+        # 原有的速度设置逻辑
+        # set desired lon position to None if in velocity following mode
+        self._desired_lon_position = None
+
+        if desired_velocity is None and self._desired_speed is None:
+            self._desired_speed = retrieve_desired_velocity_from_pp(self.config.planning_problem)
+        else:
+            self._desired_speed = desired_velocity if desired_velocity is not None else self._desired_speed
+
+        # check if desired speed is valid
+        assert self._desired_speed >= 0.0, f"<ReactivePlanner.set_desired_velocity(): desired speed has to be " \
+                                           f"positive. Provided speed{self._desired_speed}>"
+
+        if not stopping:
+            reference_speed = current_speed if current_speed is not None else self._desired_speed
+
+            min_v = max(0, reference_speed - (0.125 * self.horizon * self.vehicle_params.a_max))
+            # max_v = max(min_v + 5.0, reference_speed + (0.25 * self.horizon * self.constraints.a_max))
+            max_v = max(min_v + 5.0, reference_speed + 2)
+            self.set_v_sampling_parameters(min_v, max_v)
+        else:
+            self.set_v_sampling_parameters(v_min=self._desired_speed, v_max=self._desired_speed)
+
+        # Update desired velocity in cost function
+        if hasattr(self.cost_function, "desired_speed"):
+            self.cost_function.desired_speed = self._desired_speed
+        # update acceleration weight in cost function
+        if hasattr(self.cost_function, "w_a"):
+            self.cost_function.w_a = 5
+        # set desired_s in cost function to None
+        if hasattr(self.cost_function, "desired_s"):
+            self.cost_function.desired_s = self._desired_lon_position
+
+    def _get_velocity_factor(self, velocity: float) -> float:
+        """
+        根据速度计算约束因子
+        - 低速时 factor > 1.0 (放松约束)
+        - 中速时 factor ≈ 1.0 (保持约束)
+        - 高速时 factor < 1.0 (收紧约束)
+        """
+        v_ref = 10.0  # 参考速度
+
+        if velocity <= 3.0:  # 低速
+            return 1.5  # 放松50%
+        elif velocity <= v_ref:  # 中速
+            return 1.0
+        else:  # 高速
+            # return 0.7 * (v_ref / velocity)  # 速度越高约束越严
+            return 0.7
+
+    def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray,
+                           i: int) -> bool:
+        # 获取速度对应的约束因子
+        velocity_factor = self._get_velocity_factor(v[i])
+
+        # velocity constraint (保持不变)
+        if "velocity" in self.config.planning.constraints_to_check:
+            if v[i] < -_EPS:
+                self._infeasible_reason_dict["velocity"] += 1
+                return False
+
+        # curvature constraint
+        base_kappa_max = np.tan(self.vehicle_params.delta_max) / self.vehicle_params.wheelbase
+        kappa_max = base_kappa_max * velocity_factor
+
+        if "kappa" in self.config.planning.constraints_to_check:
+            if abs(kappa_gl[i]) > kappa_max:
+                self._infeasible_reason_dict["kappa"] += 1
+                return False
+
+        # yaw rate constraint
+        if "yaw_rate" in self.config.planning.constraints_to_check:
+            yaw_rate = (theta_gl[i] - theta_gl[i - 1]) / self.dt if i > 0 else 0.
+            base_theta_dot_max = kappa_max * v[i]  # 注意这里用的是已经调整过的kappa_max
+            theta_dot_max = base_theta_dot_max * velocity_factor
+
+            if abs(round(yaw_rate, 5)) > theta_dot_max:
+                self._infeasible_reason_dict["yaw_rate"] += 1
+                return False
+
+        # curvature rate constraint
+        if "kappa_dot" in self.config.planning.constraints_to_check:
+            steering_angle = np.arctan2(self.vehicle_params.wheelbase * kappa_gl[i], 1.0)
+            base_kappa_dot_max = self.vehicle_params.v_delta_max / (self.vehicle_params.wheelbase *
+                                                                    math.cos(steering_angle) ** 2)
+            kappa_dot_max = base_kappa_dot_max * velocity_factor * 1.3  # 10%余量
+
+            kappa_dot = (kappa_gl[i] - kappa_gl[i - 1]) / self.dt if i > 0 else 0.
+            if abs(kappa_dot) > kappa_dot_max:
+                self._infeasible_reason_dict["kappa_dot"] += 1
+                return False
+
+        # acceleration constraint
+        if "acceleration" in self.config.planning.constraints_to_check:
+            v_switch = self.vehicle_params.v_switch
+            a_max = self.vehicle_params.a_max * v_switch / v[i] if v[i] > v_switch else self.vehicle_params.a_max
+            a_min = -self.vehicle_params.a_max
+            a_max = a_max * velocity_factor
+            a_min = a_min * velocity_factor
+
+            if not a_min <= a[i] <= a_max:
+                self._infeasible_reason_dict["acceleration"] += 1
+                return False
+
+        return True

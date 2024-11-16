@@ -41,8 +41,9 @@ class BaselineCostFunction(CostFunction):
         # Weights
         self.w_a = 5  # Acceleration weight
         self.w_r = 5  # Robustness weight
-        self.w_low_speed = 3  # Low speed weight
-        self.min_desired_speed = self.speed_limitation if self.speed_limitation else 10  # Minimum desired speed
+        self.w_low_speed = 100  # Low speed weight
+        self.w_velocity = 10  # Velocity weight
+        self.min_desired_speed = self.speed_limitation if self.speed_limitation else 20  # Minimum desired speed
         # self.base_d_weight = 0.25  # 基础距离权重
         # self.final_d_weight = 20.0  # 终点距离权重
         # self.distance_threshold = 30.0  # 开始增加权重的距离阈值（米）
@@ -55,9 +56,9 @@ class BaselineCostFunction(CostFunction):
             # Default to all the rules you provided
             self.robustness_types = [
                 'R_G1',
-                # 'R_G2',
-                # 'R_G3',
-                # 'R_G4',
+                'R_G2',
+                'R_G3',
+                'R_G4',
                 # 'R_I1',
                 # 'R_I2',
                 # 'R_I3',
@@ -88,7 +89,7 @@ class BaselineCostFunction(CostFunction):
 
         # Velocity costs
         if self.desired_speed is not None:
-            costs += 3 * np.sum((5 * (trajectory.cartesian.v - self.desired_speed)) ** 2) + \
+            costs += self.w_velocity * np.sum((5 * (trajectory.cartesian.v - self.desired_speed)) ** 2) + \
                      (50 * (trajectory.cartesian.v[-1] - self.desired_speed) ** 2) + \
                      (100 * (trajectory.cartesian.v[
                                  int(len(trajectory.cartesian.v) / 2)] - self.desired_speed) ** 2)
@@ -97,7 +98,7 @@ class BaselineCostFunction(CostFunction):
                      (20 * (self.desired_s - trajectory.curvilinear.s[-1])) ** 2
 
         # Distance costs
-        costs += 50 * 5 * np.sum((0.25 * (self.desired_d - trajectory.curvilinear.d)) ** 2) + \
+        costs += 200 * 5 * np.sum((0.25 * (self.desired_d - trajectory.curvilinear.d)) ** 2) + \
                  (20 * (self.desired_d - trajectory.curvilinear.d[-1])) ** 2
 
         # Orientation costs
@@ -109,10 +110,10 @@ class BaselineCostFunction(CostFunction):
         #     min_speed = np.minimum(self.min_desired_speed, self.desired_speed)
         # except:
         #     min_speed = self.min_desired_speed
-        min_speed = self.min_desired_speed - 1
+        min_speed = self.min_desired_speed
         speed_diff = np.maximum(0, min_speed - trajectory.cartesian.v)
-        costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
-        # costs += self.w_low_speed * np.sum(speed_diff ** 2)
+        # costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
+        costs += self.w_low_speed * np.sum(speed_diff ** 2)
 
         epsilon = 1e-6  # 防止除以零
         beta = 2e2  # 静态障碍物权重

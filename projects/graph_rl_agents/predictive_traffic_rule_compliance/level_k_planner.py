@@ -1281,9 +1281,10 @@ def dense_cv(cv, interval=0.1):
 
 
 # 定义主函数
-def level_k_planner(scenario, planning_problem_set, route, ego_vehicle = None):
+def level_k_planner(scenario, planning_problem_set, route, ego_vehicle=None):
     # 打印自车信息和障碍物信息
-    print(f"Ego Vehicle ID: {ego_vehicle.obstacle_id}, Initial Position: {ego_vehicle.state_list[0].position}, ")
+    if ego_vehicle:
+        print(f"Ego Vehicle ID: {ego_vehicle.obstacle_id}, Initial Position: {ego_vehicle.state_list[0].position}")
 
     # 使用 conf_lanelet_checker 函数查找冲突点
     lanelet_network = scenario.lanelet_network
