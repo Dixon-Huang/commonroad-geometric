@@ -197,7 +197,7 @@ class DebugConfiguration(BaseConfiguration):
 class VehicleConfiguration(BaseConfiguration):
     """Class to store vehicle configurations"""
 
-    id_type_vehicle: int = 2
+    id_type_vehicle: int = 1  # Change
     # get vehicle parameters from CommonRoad vehicle models given cr_vehicle_id
     vehicle_parameters: VehicleParameters = VehicleParameterMapping.from_vehicle_type(VehicleType(id_type_vehicle))
 

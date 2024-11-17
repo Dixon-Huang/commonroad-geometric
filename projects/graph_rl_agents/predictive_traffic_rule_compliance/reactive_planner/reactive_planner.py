@@ -1212,7 +1212,6 @@ class ReactivePlanner(object):
         # Return the trajectory with minimum cost
         return collision_free_bundle.min_costs()
 
-
     def convert_state_list_to_commonroad_object(self, state_list: List[ReactivePlannerState], obstacle_id: int = 42):
         """
         Converts a CR trajectory to a CR dynamic obstacle with given dimensions
@@ -1275,7 +1274,7 @@ class ReactivePlanner(object):
             return 0.0, 0
 
         max_curvature = np.max(upcoming_curvatures)
-        if max_curvature < 0.01:  # 曲率阈值,可调
+        if max_curvature < 0.005:  # 曲率阈值,可调
             return 0.0, 0
 
         # 找到最大曲率点的距离
@@ -1328,8 +1327,8 @@ class ReactivePlanner(object):
         return braking_distance + safety_margin
 
     def set_desired_curve_velocity(self, desired_velocity: float = None,
-                             current_speed: float = None,
-                             stopping: bool = False):
+                                   current_speed: float = None,
+                                   stopping: bool = False):
         """增加曲率预见性减速"""
 
         if not stopping:
@@ -1341,7 +1340,7 @@ class ReactivePlanner(object):
 
             if max_curvature > 0:
                 # 计算安全速度
-                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=1.5)
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=1.4)
 
                 # 计算需要的减速距离
                 braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
@@ -1406,12 +1405,12 @@ class ReactivePlanner(object):
         v_ref = 10.0  # 参考速度
 
         if velocity <= 3.0:  # 低速
-            return 1.5  # 放松50%
+            return 1.0  # 放松约束
         elif velocity <= v_ref:  # 中速
-            return 1.0
+            return 0.9
         else:  # 高速
             # return 0.7 * (v_ref / velocity)  # 速度越高约束越严
-            return 0.7
+            return 0.8
 
     def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray,
                            i: int) -> bool:

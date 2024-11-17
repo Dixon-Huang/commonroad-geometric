@@ -41,8 +41,8 @@ class BaselineCostFunction(CostFunction):
         # Weights
         self.w_a = 5  # Acceleration weight
         self.w_r = 5  # Robustness weight
-        self.w_low_speed = 100  # Low speed weight
-        self.w_velocity = 10  # Velocity weight
+        self.w_low_speed = 0  # Low speed weight
+        self.w_velocity = 1  # Velocity weight
         self.min_desired_speed = self.speed_limitation if self.speed_limitation else 20  # Minimum desired speed
         # self.base_d_weight = 0.25  # 基础距离权重
         # self.final_d_weight = 20.0  # 终点距离权重
@@ -106,10 +106,6 @@ class BaselineCostFunction(CostFunction):
                 5 * (np.abs(trajectory.curvilinear.theta[-1]))) ** 2
 
         # low speed costs
-        # try:
-        #     min_speed = np.minimum(self.min_desired_speed, self.desired_speed)
-        # except:
-        #     min_speed = self.min_desired_speed
         min_speed = self.min_desired_speed
         speed_diff = np.maximum(0, min_speed - trajectory.cartesian.v)
         # costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
