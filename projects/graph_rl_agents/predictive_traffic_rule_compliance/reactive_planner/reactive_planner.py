@@ -14,6 +14,7 @@ from typing import List, Union, Optional, Tuple, Type, Dict
 import multiprocessing
 from multiprocessing.context import Process
 import logging
+import copy
 
 # commonroad-io
 from commonroad.common.validity import is_real_number
@@ -111,6 +112,9 @@ class ReactivePlanner(object):
 
         # set standstill lookahead
         self._standstill_lookahead = config.planning.standstill_lookahead
+
+        # Change
+        self.collision_check_range = 5
 
     @property
     def collision_checker(self) -> pycrcc.CollisionChecker:
@@ -808,6 +812,9 @@ class ReactivePlanner(object):
             # Initialize Feasibility boolean
             feasible = True
 
+            # Change
+            self.jump_detected = False
+
             if not self._draw_traj_set:
                 # pre-filter with quick underapproximative check for feasibility
                 if np.any(np.abs(s_acceleration) > self.vehicle_params.a_max):
@@ -820,8 +827,7 @@ class ReactivePlanner(object):
                     continue
 
             #Change: 仅计算前10个点
-            # for i in range(0, traj_len):
-            for i in range(10):
+            for i in range(0, traj_len):
                 # compute orientations
                 # see Appendix A.1 of Moritz Werling's PhD Thesis for equations
                 if not self._low_vel_mode:
@@ -878,6 +884,22 @@ class ReactivePlanner(object):
                             self._co.ref_pos[s_idx + 1],
                             self._co.ref_theta[s_idx],
                             self._co.ref_theta[s_idx + 1])
+
+                        # Change：处理低速情况下，因为Route重规划导致的orientation跳变问题
+                        delta_theta_gl = np.abs(theta_gl[i] - self.x_0.orientation)
+                        if (delta_theta_gl > 0.02 and i == 0) or self.jump_detected:
+                            self.jump_detected = True
+                            if i == 0:
+                                logger.warning(f"!!! Orientation jump detected: {delta_theta_gl} !!!")
+                            theta_gl[i] = self.x_0.orientation if i == 0 else theta_gl[i - 1]
+
+                            theta_cl[i] = theta_gl[i] - interpolate_angle(
+                                s[i],
+                                self._co.ref_pos[s_idx],
+                                self._co.ref_pos[s_idx + 1],
+                                self._co.ref_theta[s_idx],
+                                self._co.ref_theta[s_idx + 1])
+
                     else:
                         # in stillstand (s_velocity~0) and High velocity mode: assume vehicle keeps global orientation
                         theta_gl[i] = self.x_0.orientation if i == 0 else theta_gl[i - 1]
@@ -1174,7 +1196,7 @@ class ReactivePlanner(object):
 
             # Change: 对于简单的轨迹预测，只检查前10个点
             # for i in range(len(pos1)):
-            for i in range(0, 5):
+            for i in range(self.collision_check_range):
                 ego = pycrcc.TimeVariantCollisionObject(self.x_0.time_step + i * self.config.planning.factor)
                 ego.append_obstacle(pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i]))
                 if self._cc.collide(ego):
@@ -1257,7 +1279,7 @@ class ReactivePlanner(object):
         current_s = self._compute_initial_states(self.x_0)[0][0]  # 从curvilinear状态中获取当前s值
         return np.argmax(self._co.ref_pos > current_s) - 1
 
-    def analyze_upcoming_curvature(self, current_index: int, lookahead_distance: int = 20) -> Tuple[float, int]:
+    def analyze_upcoming_curvature(self, current_index: int, lookahead_distance: int = 40) -> Tuple[float, int]:
         """
         分析前方路径的曲率情况
         Args:
@@ -1337,6 +1359,56 @@ class ReactivePlanner(object):
 
             # 分析前方曲率
             max_curvature, distance_to_curve = self.analyze_upcoming_curvature(current_index)
+
+            # 根据是否存在弯道来调整collision check和规划的范围
+            if (max_curvature > 0 and
+                    distance_to_curve < 1.5 * self.x_0.velocity * self.config.planning.time_steps_computation * self.config.planning.dt):
+                # 获取当前的replanning_frequency
+                # current_freq = self.initial_replanning_frequency
+                # # 计算新的频率（向上取整保证至少是1）
+                # new_freq = max(1, (current_freq + 1) // 2)
+
+                self.config.planning.time_steps_computation = 20
+                logger.info(f"Curve ahead! Reducing time steps computation to {self.config.planning.time_steps_computation}")
+
+                self.config.planning.replanning_frequency = 5
+                logger.info(f"Curve ahead! Reducing replanning frequency to {self.config.planning.replanning_frequency}")
+
+                # self.collision_check_range = int(np.ceil(self.initial_time_steps_computation/ 2))
+                self.collision_check_range = 10
+                logger.info(f"Curve ahead! Reducing collision check range to {self.collision_check_range}")
+
+            else:
+                if self.x_0.velocity <= 5:
+                    self.config.planning.time_steps_computation = 20
+                    logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
+                                f"Increase time steps computation to {self.config.planning.time_steps_computation}")
+                # 根据速度调整规划的范围
+                elif 5 < self.x_0.velocity < 10:
+                    self.config.planning.time_steps_computation = 25
+                    logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
+                                f"Increase time steps computation to {self.config.planning.time_steps_computation}")
+
+                elif 10 <= self.x_0.velocity < 20:
+                    self.config.planning.time_steps_computation = 30
+                    logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
+                                f"Increase time steps computation to {self.config.planning.time_steps_computation}")
+
+                elif 20 <= self.x_0.velocity < 30:
+                    self.config.planning.time_steps_computation = 35
+                    logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
+                                f"Increase time steps computation to {self.config.planning.time_steps_computation}")
+
+                elif 30 <= self.x_0.velocity:
+                    self.config.planning.time_steps_computation = 40
+                    logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
+                                f"Increase time steps computation to {self.config.planning.time_steps_computation}")
+
+                self.config.planning.replanning_frequency = 10
+                logger.info(
+                    f"No curve ahead! Reducing replanning frequency to {self.config.planning.replanning_frequency}")
+                self.collision_check_range = 20
+                logger.info(f"No curve ahead! Setting collision check range to {self.collision_check_range}")
 
             if max_curvature > 0:
                 # 计算安全速度
