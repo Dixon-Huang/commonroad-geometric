@@ -67,7 +67,7 @@ model:
     debug:
       show_plots: False
       save_plots: False
-      draw_traj_set: False
+      draw_traj_set: True
       draw_icons: False
       multiproc: False # original True
       num_workers: 1 # original 6

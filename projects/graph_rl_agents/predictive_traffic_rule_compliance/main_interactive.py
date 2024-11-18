@@ -233,6 +233,7 @@ class InteractivePlanner:
 
     def __init__(self):
         # get current scenario info. from CR
+        self.brake = None
         self.route = None
         self.dt = None
         self.lanelet_ego = None  # the lanelet which ego car is located in
@@ -451,7 +452,7 @@ class InteractivePlanner:
         next_state = self.convert_to_state_list([next_state])[0]
         return next_state
 
-    def emergency_brake_with_reactive_planner(self, planner, sumo_ego_vehicle, dt):
+    def emergency_brake_with_reactive_planner(self, planner, sumo_ego_vehicle, dt, factor):
         """使用reactive planner执行紧急制动
 
         Args:
@@ -469,7 +470,6 @@ class InteractivePlanner:
         a_max = vehicle_params.longitudinal.a_max
 
         # 计算减速量
-        factor = 2.5
         delta_v = max(dt * planner.config.planning.time_steps_computation * a_max / factor, 5)
 
         # 计算期望速度
@@ -716,6 +716,25 @@ class InteractivePlanner:
             # if action.T <= 0.5
             #     self.is_new_action_needed = True
 
+        # 规划路径
+        if time_step == 0:
+            # 第一次规划
+            route_planner = RoutePlanner(scenario.lanelet_network, planning_problem)
+            self.initial_route = route_planner.plan_routes().retrieve_first_route()
+            self.route = copy.deepcopy(self.initial_route)
+            self.last_route = copy.deepcopy(self.route)  # 保存第一条路径
+
+            if self.route is None:
+                raise ValueError("Route planning failed completely")
+
+            # 更新lanelet信息
+            self.lanelet_route = self.route.lanelet_ids
+
+            if self.route is None:
+                raise ValueError("Route planning failed")
+            self.lanelet_route = self.route.lanelet_ids
+        route = self.route
+
         # 判断是否到达目标
         try:
             is_goal = self.check_goal_state(sumo_ego_vehicle.current_state.position, lanelets_of_goal_position)
@@ -723,6 +742,7 @@ class InteractivePlanner:
             is_goal = False
 
         # 接近目标刹车
+        self.brake = False
         if 'position' not in planning_problem.goal.state_list[0].__dict__.keys():
             # 如果没有位置目标，直接跳过位置相关判断
             pass
@@ -761,33 +781,24 @@ class InteractivePlanner:
                             if ttc < 6 and velocity_diff > 4:
                                 logger.info(
                                     f'*** 接近目标点 (距离: {distance_to_goal:.2f}m) 速度过高 ({ego_velocity:.2f}m/s), 执行紧急制动 ***')
-                                # 根据距离和速度选择刹车强度
-                                return self.emergency_brake(
-                                    factor=3.0 if (distance_to_goal < 30 and velocity_diff < 15) else 3.0)
+
+                                # # 根据距离和速度选择刹车强度
+                                # return self.emergency_brake(
+                                #     factor=3.0 if (distance_to_goal < 30 and velocity_diff < 15) else 3.0)
+                                # 检查前方是否有弯道
+                                if ttc < 2:
+                                    return self.emergency_brake(factor=1)
+                                has_curve = self.check_forward_curvature(distance=30.0, curvature_threshold=1e-3)
+                                if not has_curve and abs(
+                                        sumo_ego_vehicle.current_state.steering_angle) < 1e-3 and sumo_ego_vehicle.current_state.velocity < 15:
+                                    logger.info("执行紧急制动")
+                                    return self.emergency_brake(factor=3)
+                                else:
+                                    logger.info("使用reactive planner减速")
+                                    self.brake = True
 
             except Exception as e:
                 logger.info(f"获取目标位置失败，跳过位置相关制动检查: {str(e)}")
-
-        # 规划路径
-        if time_step == 0:
-            # 第一次规划
-            route_planner = RoutePlanner(scenario.lanelet_network,
-                                         planning_problem)
-            route_planner = RoutePlanner(scenario.lanelet_network, planning_problem)
-            self.initial_route = route_planner.plan_routes().retrieve_first_route()
-            self.route = copy.deepcopy(self.initial_route)
-            self.last_route = copy.deepcopy(self.route)  # 保存第一条路径
-
-            if self.route is None:
-                raise ValueError("Route planning failed completely")
-
-            # 更新lanelet信息
-            self.lanelet_route = self.route.lanelet_ids
-
-            if self.route is None:
-                raise ValueError("Route planning failed")
-            self.lanelet_route = self.route.lanelet_ids
-        route = self.route
 
         if is_goal or self.is_reach_goal_region:
             logger.info('*** 到达目标 ***')
@@ -954,7 +965,7 @@ class InteractivePlanner:
                     # set reference path for curvilinear coordinate system and desired velocity
                     planner.set_reference_path(route.reference_path)
 
-                    if not self.is_reach_goal_region:
+                    if not self.is_reach_goal_region and not self.brake:
                         planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
                                                                        desired_d=0.0,
                                                                        desired_s=planner.desired_lon_position,
@@ -973,7 +984,7 @@ class InteractivePlanner:
                                 planner.cost_function.w_low_speed = max(5e3 / (goal_time_step - time_step), 1e2)
 
                     else:
-                        self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, dt)
+                        self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, dt, factor=2)
 
                     # **************************
                     # Run Planning
@@ -1053,7 +1064,7 @@ class InteractivePlanner:
                         if planner.infeasible_count_collision > 1:
                             logger.warning("Too many infeasible trajectories due to collision")
                             try:
-                                self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, dt)
+                                self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, dt, factor=2)
                                 optimal = planner.plan()
                                 if not optimal:
                                     raise ValueError("Emergency brake failed to plan optimal trajectory")
@@ -1124,7 +1135,7 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Aachen-3_1_I-1"
 
     # name_scenario = "ZAM_Tjunction-1_270_I-1-1"
-    # name_scenario = "ZAM_Tjunction-1_517_I-1-1"
+    # name_scenario = "ZAM_Tjunction-1_517_I-1-1" # 很难解
     # name_scenario = "DEU_Ffb-2_2_I-1-1"
     # name_scenario = "DEU_A9-2_1_I-1-1"
     # name_scenario = "ZAM_Zip-1_7_I-1-1"
@@ -1143,12 +1154,13 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Aachen-3_2_I-1" # OK
     # name_scenario = "DEU_Aachen-3_3_I-1" # OK
     # name_scenario = "DEU_Aachen-3_7_I-1" # 跳变，待解决
-    name_scenario = "DEU_Aachen-3_11_I-1" # 最后一点会一直规划失败
+    # name_scenario = "DEU_Aachen-3_11_I-1" # 最后一点会一直规划失败
     # name_scenario = "DEU_Cologne-27_9_I-1" # 地图太大
     # name_scenario = "DEU_Cologne-63_8_I-1" # OK
     # name_scenario = "DEU_Dresden-3_29_I-1" # OK
     # name_scenario = "DEU_Dresden-18_4_I-1" # OK
     # name_scenario = "DEU_Dresden-18_29_I-1" # OK
+    name_scenario = "DEU_A99-1_1_I-1-1"
 
 
     main_planner = InteractivePlanner()
