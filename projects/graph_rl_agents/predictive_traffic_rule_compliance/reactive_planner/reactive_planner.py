@@ -1397,7 +1397,7 @@ class ReactivePlanner(object):
 
                     self.config.planning.time_steps_computation = 20
                     logger.info(
-                        f"Curve ahead! Set time steps computation to {self.config.planning.time_steps_computation}")
+                        f"Curve ahead! Setting time steps computation to {self.config.planning.time_steps_computation}")
 
                     self.config.planning.replanning_frequency = 5
                     logger.info(

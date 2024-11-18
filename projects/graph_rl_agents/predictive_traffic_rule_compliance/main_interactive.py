@@ -1118,9 +1118,9 @@ def main(cfg: RLProjectConfig):
     cfg_obj = OmegaConf.to_object(cfg)
 
     # folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
-    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
+    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
     # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
-    folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
+    # folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
 
     # name_scenario = "DEU_Frankfurt-73_2_I-1"
     # name_scenario = "DEU_Frankfurt-95_6_I-1"
@@ -1131,7 +1131,7 @@ def main(cfg: RLProjectConfig):
 
     # name_scenario = "DEU_Cologne-63_5_I-1"
     # name_scenario = "DEU_Frankfurt-34_11_I-1"
-    # name_scenario = "DEU_Aachen-2_1_I-1"
+    name_scenario = "DEU_Aachen-2_1_I-1"
     # name_scenario = "DEU_Aachen-3_1_I-1"
 
     # name_scenario = "ZAM_Tjunction-1_270_I-1-1"
@@ -1160,7 +1160,7 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Dresden-3_29_I-1" # OK
     # name_scenario = "DEU_Dresden-18_4_I-1" # OK
     # name_scenario = "DEU_Dresden-18_29_I-1" # OK
-    name_scenario = "DEU_A99-1_1_I-1-1"
+    # name_scenario = "DEU_A99-1_1_I-1-1" # OK
 
 
     main_planner = InteractivePlanner()
