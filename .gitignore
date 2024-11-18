@@ -160,3 +160,4 @@ nohup.out
 # Package
 tutorials/scenarios
 commonroad_geometric/simulation/interfaces/interactive/config_files
+wheel.zip

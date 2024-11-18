@@ -1389,7 +1389,7 @@ class ReactivePlanner(object):
                 logger.info(f"Distance to curve: {actual_distance:.2f} m")
 
                 # 根据是否存在弯道来调整collision check和规划的范围
-                if distance_to_curve < 1.5 * self.x_0.velocity * self.config.planning.time_steps_computation * self.config.planning.dt:
+                if distance_to_curve < max(1.5 * self.x_0.velocity * self.config.planning.time_steps_computation * self.config.planning.dt, 10):
                     # 获取当前的replanning_frequency
                     # current_freq = self.initial_replanning_frequency
                     # # 计算新的频率（向上取整保证至少是1）
@@ -1406,6 +1406,11 @@ class ReactivePlanner(object):
                     # self.collision_check_range = int(np.ceil(self.initial_time_steps_computation/ 2))
                     self.collision_check_range = 10
                     logger.info(f"Curve ahead! Setting collision check range to {self.collision_check_range}")
+
+                    if abs(self.x_0.velocity - safe_speed) >= 5:
+                        self.cost_function.w_velocity = 10
+                        self.cost_function.w_low_speed = 0
+                        logger.info(f"Ignoring low speed cost function")
 
                 else:
                     if self.x_0.velocity <= 5:
@@ -1482,9 +1487,9 @@ class ReactivePlanner(object):
         v_ref = 10.0  # 参考速度
 
         if velocity <= 3.0:  # 低速
-            return 1.0  # 放松约束
+            return 1.1  # 放松约束
         elif velocity <= v_ref:  # 中速
-            return 0.9
+            return 1.0
         else:  # 高速
             # return 0.7 * (v_ref / velocity)  # 速度越高约束越严
             return 0.8
