@@ -619,59 +619,54 @@ class InteractivePlanner:
 
         logger.info("=" * 50 + " Start Simulation " + "=" * 50)
 
-        try:
-            for step in range(self.num_of_steps):
-                # for step in range(0, 20):
+        # for step in range(self.num_of_steps):
+        for step in range(0, 20):
 
-                logger.info(f"process: {step}/{self.num_of_steps}")
-                current_scenario = sumo_sim.commonroad_scenario_at_time_step(sumo_sim.current_time_step)
-                # sumo_ego_vehicle = list(sumo_ego_vehicles.values())[0]
-                self.ego_state = sumo_ego_vehicle.current_state
+            logger.info(f"process: {step}/{self.num_of_steps}")
+            current_scenario = sumo_sim.commonroad_scenario_at_time_step(sumo_sim.current_time_step)
+            # sumo_ego_vehicle = list(sumo_ego_vehicles.values())[0]
+            self.ego_state = sumo_ego_vehicle.current_state
 
-                # initial positions do not match
-                planning_problem.initial_state.position = copy.deepcopy(sumo_ego_vehicle.current_state.position)
-                planning_problem.initial_state.orientation = copy.deepcopy(sumo_ego_vehicle.current_state.orientation)
-                planning_problem.initial_state.velocity = copy.deepcopy(sumo_ego_vehicle.current_state.velocity)
-                planning_problem.initial_state.acceleration = copy.deepcopy(sumo_ego_vehicle.current_state.acceleration)
-                planning_problem.initial_state.time_step = sumo_sim.current_time_step
-                # ====== plug in your motion planner here
-                # ====== paste in simulations
+            # initial positions do not match
+            planning_problem.initial_state.position = copy.deepcopy(sumo_ego_vehicle.current_state.position)
+            planning_problem.initial_state.orientation = copy.deepcopy(sumo_ego_vehicle.current_state.orientation)
+            planning_problem.initial_state.velocity = copy.deepcopy(sumo_ego_vehicle.current_state.velocity)
+            planning_problem.initial_state.acceleration = copy.deepcopy(sumo_ego_vehicle.current_state.acceleration)
+            planning_problem.initial_state.time_step = sumo_sim.current_time_step
+            # ====== plug in your motion planner here
+            # ====== paste in simulations
 
-                # self.t_record += 0.1
-                # if self.t_record > 1 and (self.last_semantic_action is None or self.last_semantic_action not in {1, 2}):
-                #     self.is_new_action_needed = True
-                #     logger.info('force to get a new action during straight-going')
-                #     self.t_record = 0
+            # self.t_record += 0.1
+            # if self.t_record > 1 and (self.last_semantic_action is None or self.last_semantic_action not in {1, 2}):
+            #     self.is_new_action_needed = True
+            #     logger.info('force to get a new action during straight-going')
+            #     self.t_record = 0
 
-                # generate a CR planner
-                next_state = self.planning(copy.deepcopy(current_scenario),
-                                           planning_problem_set,
-                                           sumo_ego_vehicle,
-                                           sumo_sim.current_time_step,
-                                           reactive_planner_config,
-                                           simulation_options,
-                                           # extractor_factory,
-                                           dt,
-                                           lanelets_of_goal_position)
+            # generate a CR planner
+            next_state = self.planning(copy.deepcopy(current_scenario),
+                                       planning_problem_set,
+                                       sumo_ego_vehicle,
+                                       sumo_sim.current_time_step,
+                                       reactive_planner_config,
+                                       simulation_options,
+                                       # extractor_factory,
+                                       dt,
+                                       lanelets_of_goal_position)
 
-                logger.info(
-                    f'next ego position: {next_state.position}, next ego steering angle: {next_state.steering_angle}, next ego velocity: {next_state.velocity}')
-                logger.info(
-                    f'next ego orientation: {next_state.orientation}, next ego acceleration: {next_state.acceleration}, next yaw rate: {next_state.yaw_rate}')
+            logger.info(
+                f'next ego position: {next_state.position}, next ego steering angle: {next_state.steering_angle}, next ego velocity: {next_state.velocity}')
+            logger.info(
+                f'next ego orientation: {next_state.orientation}, next ego acceleration: {next_state.acceleration}, next yaw rate: {next_state.yaw_rate}')
 
-                # ====== paste in simulations
-                # ====== end of motion planner
-                next_state.time_step = 1
-                # next_state.steering_angle = 0.0
-                trajectory_ego = [next_state]
-                sumo_ego_vehicle.set_planned_trajectory(trajectory_ego)
+            # ====== paste in simulations
+            # ====== end of motion planner
+            next_state.time_step = 1
+            # next_state.steering_angle = 0.0
+            trajectory_ego = [next_state]
+            sumo_ego_vehicle.set_planned_trajectory(trajectory_ego)
 
-                sumo_sim.simulate_step()
-                logger.info("=" * 120)
-
-        except Exception as e:
-            logger.info(f"*** simulation failed ***")
-            logger.info(f"*** failed reason: {e} ***")
+            sumo_sim.simulate_step()
+            logger.info("=" * 120)
 
         # retrieve the simulated scenario in CR format
         simulated_scenario = sumo_sim.commonroad_scenarios_all_time_steps()
@@ -1231,6 +1226,8 @@ def main(cfg: RLProjectConfig):
     #         logger.info('after recon, Local Feasible? {}'.format(feasible))
     # except Exception as e:
     #     logger.warning(e)
+
+    cr_solution, feasibility_list = run_evaluation(planner.config, planner.record_state_list, planner.record_input_list)
 
     feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
                                                                                 main_planner.vehicle,
