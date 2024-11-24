@@ -26,6 +26,8 @@ class BaselineCostFunction(CostFunction):
                  ego_vehicle=None,
                  speed_limitation=None,
                  robustness_types: Optional[list] = None,
+                 scenario=None,
+                 current_time_step=None
                  ) -> None:
         super(BaselineCostFunction, self).__init__()
         # Target states
@@ -33,8 +35,10 @@ class BaselineCostFunction(CostFunction):
         self.desired_d = desired_d
         self.desired_s = desired_s
         self.simulation = simulation
-        self.initial_time_step = copy.deepcopy(self.simulation.current_time_step)
-        self.scenario = simulation.current_scenario
+        # self.initial_time_step = copy.deepcopy(self.simulation.current_time_step)
+        # self.scenario = simulation.current_scenario
+        self.scenario = scenario
+        self.initial_time_step = current_time_step
         self.ego_vehicle = ego_vehicle
         self.traffic_extractor = traffic_extractor
         self.speed_limitation = speed_limitation
@@ -73,16 +77,16 @@ class BaselineCostFunction(CostFunction):
 
         costs = 0.0
 
-        # Compute rule robustness at specific points along the trajectory
-        robustness_list, indices, time_duration = self._calculate_robustness(trajectory)
-        robustness_array = np.array(robustness_list)
-
-        # Since we are minimizing cost, and higher robustness is better,
-        # we subtract the robustness from the cost (or equivalently, add negative robustness)
-        # Multiply by weight and scaling factor
-        costs -= 1e2 * (np.sum(5 * robustness_array) / len(self.robustness_types) + \
-                        (50 * robustness_array[-1]) + \
-                        (100 * robustness_array[int(len(robustness_array) / 2)]))
+        # # Compute rule robustness at specific points along the trajectory
+        # robustness_list, indices, time_duration = self._calculate_robustness(trajectory)
+        # robustness_array = np.array(robustness_list)
+        #
+        # # Since we are minimizing cost, and higher robustness is better,
+        # # we subtract the robustness from the cost (or equivalently, add negative robustness)
+        # # Multiply by weight and scaling factor
+        # costs -= 1e2 * (np.sum(5 * robustness_array) / len(self.robustness_types) + \
+        #                 (50 * robustness_array[-1]) + \
+        #                 (100 * robustness_array[int(len(robustness_array) / 2)]))
 
         # Other cost calculations
         # Acceleration costs
@@ -146,18 +150,18 @@ class BaselineCostFunction(CostFunction):
                     distance_from_dynamic_ob += cost
         costs += gamma * distance_from_dynamic_ob  # 距离障碍物越近，成本越高
 
-        # Restore the original state
-        self.ego_vehicle.reset_state_list(time_duration=time_duration)
-        self.simulation.close()
-        self.simulation.start()
-        self.simulation = self.simulation(
-            from_time_step=self.ego_vehicle.current_time_step,
-            ego_vehicle=self.ego_vehicle,
-        )
-        self.simulation.lifecycle.run_ego()
-        # self.traffic_extractor._simulation = self.simulation
-        # 重置world_state的ego_vehicle状态
-        remove_future_states(self.simulation.world_state.vehicle_by_id(-1), self.initial_time_step)
+        # # Restore the original state
+        # self.ego_vehicle.reset_state_list(time_duration=time_duration)
+        # self.simulation.close()
+        # self.simulation.start()
+        # self.simulation = self.simulation(
+        #     from_time_step=self.ego_vehicle.current_time_step,
+        #     ego_vehicle=self.ego_vehicle,
+        # )
+        # self.simulation.lifecycle.run_ego()
+        # # self.traffic_extractor._simulation = self.simulation
+        # # 重置world_state的ego_vehicle状态
+        # remove_future_states(self.simulation.world_state.vehicle_by_id(-1), self.initial_time_step)
 
         return costs
 
