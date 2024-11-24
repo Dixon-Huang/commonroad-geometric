@@ -48,6 +48,7 @@ class BaselineCostFunction(CostFunction):
         self.w_s = 200  # Distance weight
         self.w_low_speed = 0  # Low speed weight
         self.w_velocity = 1  # Velocity weight
+        self.w_position = 50  # Position weight
         self.min_desired_speed = self.speed_limitation if self.speed_limitation else 20  # Minimum desired speed
         # self.base_d_weight = 0.25  # 基础距离权重
         # self.final_d_weight = 20.0  # 终点距离权重
@@ -99,7 +100,7 @@ class BaselineCostFunction(CostFunction):
                      (100 * (trajectory.cartesian.v[
                                  int(len(trajectory.cartesian.v) / 2)] - self.desired_speed) ** 2)
         if self.desired_s is not None:
-            costs += 50 * 5 * np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
+            costs += self.w_position * 5 * np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
                      (20 * (self.desired_s - trajectory.curvilinear.s[-1])) ** 2
 
         # Distance costs

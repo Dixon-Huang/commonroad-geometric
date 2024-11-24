@@ -66,7 +66,7 @@ model:
       num_sampling_levels: 4 # original 4
 
     debug:
-      show_plots: False
+      show_plots: True
       save_plots: False
       draw_traj_set: True
       draw_icons: False

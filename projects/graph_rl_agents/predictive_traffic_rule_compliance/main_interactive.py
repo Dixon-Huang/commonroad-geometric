@@ -441,6 +441,7 @@ class InteractivePlanner:
             stopping=stopping
         )
 
+        self.cost_function.w_a = 0
         # self.planning_cycle = -1
 
     def check_forward_curvature(self, distance: float = 20.0, curvature_threshold: float = 0.05) -> bool:
@@ -500,6 +501,225 @@ class InteractivePlanner:
         except Exception as e:
             logger.warning(f"前方道路曲率检查失败: {e}")
             return True  # 安全起见返回True
+
+    def find_nearest_route_point_to_goal(self, goal_center) -> float:
+        """
+        找到参考路径上距离目标中心最近的点的弧长(s)坐标
+
+        Args:
+            goal_center: 目标区域中心点坐标, np.array([x, y])
+
+        Returns:
+            float: 最近点的弧长坐标(s)
+        """
+        # 参考路径上的所有点
+        ref_points = self.route.reference_path
+
+        # 计算每个点到目标中心的距离
+        distances = np.linalg.norm(ref_points - goal_center, axis=1)
+
+        # 找到最近点的索引
+        nearest_idx = np.argmin(distances)
+
+        # 返回该点的弧长坐标
+        return self.route.path_length_per_point[nearest_idx]
+
+    def plan_goal_stopping(self, planner, goal_center, distance_to_goal, ego_velocity, ttc):
+        """
+        改进的目标点停车规划
+
+        Args:
+            planner: ReactivePlanner实例
+            goal_center: 目标区域中心点
+            distance_to_goal: 到目标的距离
+            ego_velocity: 当前速度
+            ttc: 到达目标的预估时间
+        """
+        planner.set_cost_function(DefaultCostFunction())
+        try:
+            # 找到参考路径上最近的点的弧长
+            goal_s = self.find_nearest_route_point_to_goal(goal_center)
+
+            # 根据距离和速度确定停车规划的范围
+            if distance_to_goal < 30:  # 距离目标30m内开始考虑停车
+                # 计算当前位置的弧长坐标
+                current_s = planner._compute_initial_states(self.ego_state)[0][0]
+                remaining_distance = goal_s - current_s
+
+                # 根据剩余距离动态调整停车规划参数
+                if abs(remaining_distance) < 0.3:  # 非常接近目标点
+                    delta_s_min = -0.5  # 允许轻微倒车调整
+                    delta_s_max = 0.5
+                    # 如果速度接近0且位置合适，允许完全停止
+                    if ego_velocity < 0.05 and abs(remaining_distance) < 0.1:
+                        planner.set_desired_velocity(
+                            desired_velocity=0.0,
+                            current_speed=ego_velocity,
+                            stopping=True
+                        )
+                        return True
+                elif abs(remaining_distance) < 2.0:  # 比较接近目标点
+                    delta_s_min = -1.0
+                    delta_s_max = max(1.0, remaining_distance * 1.2)
+                    # 降低但不要完全停止
+                    planner._desired_speed = min(0.3, ego_velocity)
+                else:  # 还有一定距离
+                    # 根据当前速度预留足够的停车距离
+                    stopping_distance = ego_velocity * min(2.0, ttc)  # 使用ttc但限制最大值
+                    delta_s_min = -stopping_distance * 0.1  # 允许少量倒车
+                    delta_s_max = stopping_distance * 1.2  # 预留20%的缓冲距离
+                    # 逐步降低期望速度
+                    target_speed = max(0.5, min(ego_velocity,
+                                                abs(remaining_distance) / 3.0))  # 根据剩余距离计算合适的速度
+                    planner.set_desired_velocity(current_speed=ego_velocity, desired_velocity=target_speed)
+
+                logger.info(f"Planning stop at s={goal_s:.2f}m with range [{delta_s_min:.2f}, {delta_s_max:.2f}], "
+                            f"remaining distance={remaining_distance:.2f}m, target speed={planner._desired_speed:.2f}m/s")
+
+                # 调整cost function权重，使其更注重位置精度
+                if hasattr(planner.cost_function, "w_position"):
+                    if abs(remaining_distance) < 5.0:
+                        planner.cost_function.w_position *= 100.0  # 增加位置权重
+
+                # 使用ReactivePlanner的停车规划功能
+                planner.set_desired_lon_position(
+                    lon_position=goal_s,
+                    delta_s_min=delta_s_min,
+                    delta_s_max=delta_s_max
+                )
+                return True
+
+        except Exception as e:
+            logger.warning(f"停车规划失败: {str(e)}")
+            return False
+
+        except Exception as e:
+            logger.warning(f"停车规划失败: {str(e)}")
+            return False
+
+    def process_goal_position(self, planning_problem, sumo_ego_vehicle, planner, current_count):
+        """
+        处理目标位置相关的停车规划逻辑
+
+        Args:
+            planning_problem: 规划问题
+            sumo_ego_vehicle: 自车状态
+            planner: ReactivePlanner实例
+            current_count: 当前时间步
+
+        Returns:
+            next_state: 如果需要紧急制动返回next_state，否则返回None
+        """
+        try:
+            goal_center = (planning_problem.goal.state_list[0].position.center if hasattr(
+                planning_problem.goal.state_list[0].position, 'center')
+                           else planning_problem.goal.state_list[0].position.shapes[0].center if hasattr(
+                planning_problem.goal.state_list[0].position, 'shapes')
+            else None)
+
+            goal_area = (planning_problem.goal.state_list[0].position.shapely_object.area if hasattr(
+                planning_problem.goal.state_list[0].position, 'center')
+                         else planning_problem.goal.state_list[0].position.shapes[0].shapely_object.area if hasattr(
+                planning_problem.goal.state_list[0].position, 'shapes')
+            else None)
+
+            if goal_center is not None and goal_area < 200:
+                distance_to_goal = np.linalg.norm(goal_center - sumo_ego_vehicle.current_state.position)
+                ego_velocity = sumo_ego_vehicle.current_state.velocity
+
+                # 获取目标速度(如果有的话)
+                goal_velocity = (planning_problem.goal.state_list[0].velocity.end
+                                 if 'velocity' in planning_problem.goal.state_list[0].__dict__.keys()
+                                 else 0)
+                # 计算速度差
+                velocity_diff = ego_velocity - goal_velocity
+                # 计算时间到达目标
+                ttc = distance_to_goal / (velocity_diff + 1e-5)  # 防止除零
+
+                if distance_to_goal < 5:
+                    self.is_reach_goal_region = True
+
+                # 判断是否需要刹车
+                if distance_to_goal < 10 or self.is_reach_goal_region:
+                    self.close_to_goal = True
+                    logger.info(
+                        f'=== 接近目标点 (距离: {distance_to_goal:.2f}m)), 规划使用lon_position停车 ===')
+                    # 尝试使用平滑停车规划
+                    if self.plan_goal_stopping(planner, goal_center, distance_to_goal, ego_velocity, ttc):
+                        self.brake = True
+                    else:
+                        # 如果平滑停车规划失败，回退到原来的紧急制动逻辑
+                        logger.info("平滑停车规划失败，使用常规制动")
+                        self.brake = True
+
+                elif distance_to_goal < ego_velocity * 3 and (ttc < 3 or velocity_diff > 15):
+                    logger.info(
+                        f'=== 接近目标点 (距离: {distance_to_goal:.2f}m) 速度过高 ({ego_velocity:.2f}m/s), 执行制动 ===')
+                    self.brake = True
+
+            return None
+
+        except Exception as e:
+            logger.info(f"处理目标位置相关停车规划失败: {str(e)}")
+            return None
+
+    def get_speed_limitation(self, scenario, current_lanelet, current_speed) -> tuple[float, float]:
+        """
+        获取当前车道的限速值和建议速度
+
+        Args:
+            scenario: 场景对象
+            sumo_ego_vehicle: 自车状态
+
+        Returns:
+            tuple: (speed_limitation, desired_velocity)
+            - speed_limitation: 限速值，如果没有限速则返回None
+            - desired_velocity: 建议速度，考虑了限速和其他因素
+        """
+        speed_limitation = None
+
+        try:
+            lanelet_network = scenario.lanelet_network
+
+            # 检查是否有交通标志
+            if current_lanelet.traffic_signs:
+                speed_limitations = []
+
+                # 遍历所有交通标志
+                for traffic_sign_id in current_lanelet.traffic_signs:
+                    traffic_sign = lanelet_network.find_traffic_sign_by_id(traffic_sign_id)
+                    traffic_sign_element = traffic_sign.traffic_sign_elements[0]
+
+                    # 检查是否是限速标志
+                    if traffic_sign_element.traffic_sign_element_id.name == 'MAX_SPEED':
+                        speed_limitations.append(float(traffic_sign_element.additional_values[0]))
+
+                # 如果有限速标志
+                if speed_limitations:
+                    # 限制最高速度为40m/s
+                    speed_limitation = min(40, min(speed_limitations))
+                    logger.info(f"speed limitation: {speed_limitation}")
+
+                    # 如果不接近目标，可以稍微超速
+                    if not self.close_to_goal:
+                        desired_velocity = speed_limitation * 1.1
+                    else:
+                        desired_velocity = speed_limitation
+                else:
+                    logger.info(f"no speed limitation, set speed limitation to 30")
+                    desired_velocity = max(30, current_speed)
+            else:
+                logger.info(f"no speed limitation，set speed limitation to 30")
+                desired_velocity = max(20, current_speed)
+
+        except Exception as e:
+            logger.warning(f"*** get speed limitation failed ***")
+            logger.warning(f"failed reason: {e}")
+            # 发生异常时使用默认值
+            speed_limitation = 30
+            desired_velocity = 30
+
+        return speed_limitation, desired_velocity
 
     def initialize(self, folder_scenarios, name_scenario):
         self.vehicle_type = VehicleType.FORD_ESCORT
@@ -575,8 +795,8 @@ class InteractivePlanner:
         sumo_ego_vehicle.current_state.yaw_rate = 0.0
 
         scenario = sumo_sim.commonroad_scenario_at_time_step(sumo_sim.current_time_step)
-
         reactive_planner_config.update(scenario=scenario, planning_problem=planning_problem)
+
         route_planner = RoutePlanner(scenario.lanelet_network, planning_problem)
         self.route = route_planner.plan_routes().retrieve_first_route()
         self.lanelet_route = self.route.lanelet_ids
@@ -590,7 +810,7 @@ class InteractivePlanner:
         logger.info("=" * 50 + " Start Simulation " + "=" * 50)
         try:
             for current_count in range(self.num_of_steps):
-            # for current_count in range(0, 50):
+            # for current_count in range(0, 300):
 
                 logger.info(f"process: {current_count}/{self.num_of_steps}")
 
@@ -602,9 +822,10 @@ class InteractivePlanner:
                     trajectory = Trajectory(current_count, [obstacle.initial_state] + predicted_states)
                     obstacle.prediction = TrajectoryPrediction(trajectory, shape=obstacle.obstacle_shape)
                     if current_count == 0:
-                        obstacle.obstacle_shape.length += 0.3
+                        obstacle.obstacle_shape.length += 0.5
                         obstacle.obstacle_shape.width += 0.3
                 planner.set_collision_checker(scenario=current_scenario)
+                planner.config.scenario = current_scenario
 
                 self.ego_state = sumo_ego_vehicle.current_state
 
@@ -671,9 +892,33 @@ class InteractivePlanner:
             f"ego orientation: {sumo_ego_vehicle.current_state.orientation}, ego acceleration: {sumo_ego_vehicle.current_state.acceleration}, yaw rate: {sumo_ego_vehicle.current_state.yaw_rate}")
 
         planning_problem = list(planning_problem_set.planning_problem_dict.values())[0]
+        lanelet_network = scenario.lanelet_network
+        lanelet_id_ego = None
+        # 找到当前车道
+        potential_ego_lanelet_id_list = lanelet_network.find_lanelet_by_position(
+            [sumo_ego_vehicle.current_state.position])[0]
+        # 优先使用规划路径上的车道
+        for idx in potential_ego_lanelet_id_list:
+            if idx in self.lanelet_route:
+                lanelet_id_ego = idx
+                break
+        route_replan = False
+        # 处理在其他车道超车的情况
+        if lanelet_id_ego is None:
+            lanelet_id_ego = potential_ego_lanelet_id_list[0]
+            route_replan = True
+        self.lanelet_ego = lanelet_id_ego
+        logger.info(f'current lanelet id: {self.lanelet_ego}')
+        # 获取当前车道信息
+        current_lanelet = lanelet_network.find_lanelet_by_id(self.lanelet_ego)
 
-        if current_count == 40:
-            pass
+        if route_replan:
+            route_planning_problem = copy.deepcopy(planning_problem)
+            route_planning_problem.initial_state.position = sumo_ego_vehicle.current_state.position
+            route_planner = RoutePlanner(scenario.lanelet_network, route_planning_problem)
+            self.route = route_planner.plan_routes().retrieve_first_route()
+            self.lanelet_route = self.route.lanelet_ids
+            planner.set_reference_path(self.route.reference_path)
 
         # 判断是否到达目标
         try:
@@ -698,112 +943,33 @@ class InteractivePlanner:
             # 如果到达目标且速度不为0，执行停车
             self.brake = True
 
+        # 接近目标减速
         if 'position' not in planning_problem.goal.state_list[0].__dict__.keys():
             # 如果没有位置目标，直接跳过位置相关判断
             pass
-        elif not self.is_reach_goal_region:
-            # 尝试获取目标中心位置
-            try:
-                goal_center = (planning_problem.goal.state_list[0].position.center if hasattr(
-                    planning_problem.goal.state_list[0].position, 'center')
-                               else planning_problem.goal.state_list[0].position.shapes[0].center if hasattr(
-                    planning_problem.goal.state_list[0].position, 'shapes')
-                else None)
-
-                goal_area = (planning_problem.goal.state_list[0].position.shapely_object.area if hasattr(
-                    planning_problem.goal.state_list[0].position, 'center')
-                             else planning_problem.goal.state_list[0].position.shapes[0].shapely_object.area if hasattr(
-                    planning_problem.goal.state_list[0].position, 'shapes')
-                else None)
-
-                if goal_center is not None and goal_area < 200:
-                    distance_to_goal = np.linalg.norm(goal_center - sumo_ego_vehicle.current_state.position)
-                    ego_velocity = sumo_ego_vehicle.current_state.velocity
-
-                    if distance_to_goal < 20:
-                        self.close_to_goal = True
-
-                    # 更新到达目标状态
-                    if distance_to_goal < 5 or self.is_reach_goal_region:
-                        self.is_reach_goal_region = True
-                    else:
-                        # 获取目标速度(如果有的话)
-                        goal_velocity = (planning_problem.goal.state_list[0].velocity.end
-                                         if 'velocity' in planning_problem.goal.state_list[0].__dict__.keys()
-                                         else 0)
-                        # 计算速度差
-                        velocity_diff = ego_velocity - goal_velocity
-                        # 计算时间到达目标
-                        ttc = distance_to_goal / (velocity_diff + 1e-5)  # 防止除零
-                        # 判断是否需要刹车
-                        if ttc < 1 and velocity_diff > 5:
-                            logger.info(
-                                f'*** 接近目标点 (距离: {distance_to_goal:.2f}m) 速度过高 ({ego_velocity:.2f}m/s), 执行紧急制动 ***')
-                            next_state = self.emergency_brake(current_count)
-                            next_state_shifted = next_state.translate_rotate(
-                                np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
-                                          -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
-                                0.0)
-                            planner.record_state_and_input(next_state_shifted)
-                            planner.reset(initial_state_cart=planner.record_state_list[-1],
-                                          collision_checker=planner.collision_checker,
-                                          coordinate_system=planner.coordinate_system)
-                            return next_state
-                        elif ttc < 3 and velocity_diff > 3:  # 添加速度大于0的判断
-                            logger.info(
-                                f'*** 接近目标点 (距离: {distance_to_goal:.2f}m) 速度过高 ({ego_velocity:.2f}m/s), 执行制动 ***')
-                            self.brake = True
-
-            except Exception as e:
-                logger.info(f"获取目标位置失败，跳过位置相关制动检查: {str(e)}")
+        elif 'velocity' not in planning_problem.goal.state_list[0].__dict__.keys():
+            if 'time_step' in planning_problem.goal.state_list[0].__dict__.keys():
+                if planning_problem.goal.state_list[0].time_step.start > 50:
+                    # 处理目标位置相关的停车规划
+                    next_state = self.process_goal_position(planning_problem, sumo_ego_vehicle, planner, current_count)
+                    if next_state is not None:
+                        return next_state
+        else:
+            # 处理目标位置相关的停车规划
+            next_state = self.process_goal_position(planning_problem, sumo_ego_vehicle, planner, current_count)
+            if next_state is not None:
+                return next_state
 
         # check if planning cycle or not
         plan_new_trajectory = self.planning_cycle % reactive_planner_config.planning.replanning_frequency == 0
 
-        speed_limitation = None
         if plan_new_trajectory or self.force_replan:
             self.force_replan = False
-            desired_velocity = None
+
             # 获取限速
-            try:
-                lanelet_network = scenario.lanelet_network
-                lanelet_id_ego = None
+            speed_limitation, desired_velocity = self.get_speed_limitation(scenario, current_lanelet, planner.x_0.velocity)
 
-                # find current lanelet
-                potential_ego_lanelet_id_list = lanelet_network.find_lanelet_by_position([sumo_ego_vehicle.current_state.position])[0]
-                for idx in potential_ego_lanelet_id_list:
-                    if idx in self.lanelet_route:
-                        lanelet_id_ego = idx
-                # 处理在其他车道超车的情况
-                if lanelet_id_ego is None:
-                    lanelet_id_ego = potential_ego_lanelet_id_list[0]
-                self.lanelet_ego = lanelet_id_ego
-                logger.info(f'current lanelet id: {self.lanelet_ego}')
-
-                current_lanelet = lanelet_network.find_lanelet_by_id(self.lanelet_ego)
-                if current_lanelet.traffic_signs:
-                    speed_limitations = []
-                    for traffic_sign_id in current_lanelet.traffic_signs:
-                        traffic_sign = lanelet_network.find_traffic_sign_by_id(traffic_sign_id)
-                        traffic_sign_element = traffic_sign.traffic_sign_elements[0]
-                        if traffic_sign_element.traffic_sign_element_id.name == 'MAX_SPEED':
-                            speed_limitations.append(float(traffic_sign_element.additional_values[0]))
-                    if len(speed_limitations) != 0:
-                        speed_limitation = min(33, min(speed_limitations))
-                        logger.info(f"speed limitation: {speed_limitation}")
-                        if not self.close_to_goal:
-                            desired_velocity = speed_limitation * 1.1
-                    else:
-                        logger.info(f"no speed limitation, set spped limitation to 15")
-                        desired_velocity = 30
-                else:
-                    logger.info(f"no speed limitation，set spped limitation to 30")
-                    desired_velocity = 30
-            except Exception as e:
-                logger.warning(f"*** get speed limitation failed ***")
-                logger.warning(f"failed reason: {e}")
-
-            if not self.is_reach_goal_region and not self.brake:
+            if not self.is_reach_goal_region and not self.brake and not self.close_to_goal:
                 planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
                                                                desired_d=0.0,
                                                                desired_s=planner.desired_lon_position,
@@ -823,9 +989,12 @@ class InteractivePlanner:
                 planner.set_desired_curve_velocity(current_speed=planner.x_0.velocity,
                                                    desired_velocity=desired_velocity)
 
+            elif self.close_to_goal:
+                pass
+
             else:
+                planner.set_cost_function(DefaultCostFunction())
                 self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, factor=2)
-                planner.cost_function
 
             # **************************
             # Run Planning
@@ -847,7 +1016,7 @@ class InteractivePlanner:
                     self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config,
                                               current_count)
                     self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config,
-                                              current_count + 10)
+                                              current_count + 20)
                 except Exception as e:
                     logger.warning(f"visualize failed trajectory failed")
                     logger.warning(f"failed reason: {e}")
@@ -855,17 +1024,26 @@ class InteractivePlanner:
                 # If too many infeasible trajectories due to collision, perform emergency brake
                 if planner.infeasible_count_collision > 10:
                     logger.warning("Too many infeasible trajectories due to collision")
+                    planner.set_cost_function(DefaultCostFunction())
                     self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, factor=2)
                     self.optimal = planner.plan()
+                    if not self.optimal and planner.infeasible_count_collision < 10:
+                        logger.warning("All infeasible trajectories are due to hard braking")
+                        desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
+                        planner.set_desired_velocity(current_speed=planner.x_0.velocity,
+                                                     desired_velocity=desired_velocity)
+                        self.optimal = planner.plan()
 
-                elif self.is_reach_goal_region:
+                elif self.brake:
                     logger.warning("All infeasible trajectories are due to hard braking in goal region")
+                    planner.set_cost_function(DefaultCostFunction())
                     desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
                     planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=desired_velocity)
                     self.optimal = planner.plan()
 
                 else:
                     logger.warning("All infeasible trajectories are due to kinematic constraints")
+                    planner.set_cost_function(DefaultCostFunction())
                     planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=planner.x_0.velocity)
                     self.optimal = planner.plan()
 
@@ -875,7 +1053,7 @@ class InteractivePlanner:
                 #     self.optimal = planner.plan()
 
                 if self.optimal is None:
-                    logger.warning("Failed to plan optimal trajectory with fail-safe cost function, perform emergency brake")
+                    # logger.warning("Failed to plan optimal trajectory with fail-safe cost function, perform emergency brake")
                     next_state = self.emergency_brake(current_count)
                     next_state_shifted = next_state.translate_rotate(np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
                                                                                -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
@@ -918,7 +1096,8 @@ class InteractivePlanner:
                           collision_checker=planner.collision_checker, coordinate_system=planner.coordinate_system)
 
         try:
-            self.is_reach_goal_region = planner.goal_reached()
+            if not self.is_reach_goal_region:
+                self.is_reach_goal_region = planner.goal_reached()
         except Exception as e:
             logger.warning(f"*** goal_reached failed ***")
             logger.warning(f"failed reason: {e}")
@@ -952,12 +1131,12 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "ZAM_Tjunction-1_517_I-1-1" # 很难解
     # name_scenario = "DEU_Ffb-2_2_I-1-1"
     # name_scenario = "DEU_A9-2_1_I-1-1" # OK
-    name_scenario = "ZAM_Zip-1_7_I-1-1"
+    # name_scenario = "ZAM_Zip-1_7_I-1-1" # OK
     # name_scenario = "ZAM_Tjunction-1_42_I-1-1"
     # name_scenario = "DEU_Muc-4_2_I-1-1" # OK
     # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
-    # name_scenario = "ZAM_Zip-1_69_I-1-1"
-    # name_scenario = "ZAM_ACC-1_3_I-1-1" # 轨迹不太可行
+    # name_scenario = "ZAM_Zip-1_69_I-1-1" # OK
+    name_scenario = "ZAM_ACC-1_3_I-1-1" # 轨迹不太可行
     # name_scenario = "DEU_A9-1_2_I-1-1" # 撞了前面的车
     # name_scenario = "ZAM_Tjunction-1_258_I-1-1"  # 解不了
     # name_scenario = "ZAM_Tjunction-1_110_I-1-1"
@@ -971,7 +1150,7 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Aachen-29_9_I-1" # OK
     # name_scenario = "DEU_Cologne-21_1_I-1"
     # name_scenario = "DEU_Cologne-63_8_I-1" # OK
-    # name_scenario = "DEU_Dresden-3_14_I-1"
+    # name_scenario = "DEU_Dresden-3_14_I-1" # OK
     # name_scenario = "DEU_Dresden-3_29_I-1" # OK
     # name_scenario = "DEU_Dresden-18_4_I-1" # OK
     # name_scenario = "DEU_Dresden-18_29_I-1" # OK

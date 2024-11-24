@@ -47,6 +47,7 @@ class DefaultCostFunction(CostFunction):
 
         # weights
         self.w_a = 5    # acceleration weight
+        self.w_position = 1  # position weight
 
     def evaluate(self, trajectory: commonroad_rp.trajectories.TrajectorySample):
         costs = 0.0
@@ -58,7 +59,7 @@ class DefaultCostFunction(CostFunction):
                      (50 * (trajectory.cartesian.v[-1] - self.desired_speed) ** 2) + \
                      (100 * (trajectory.cartesian.v[int(len(trajectory.cartesian.v)/2)] - self.desired_speed) ** 2)
         if self.desired_s is not None:
-            costs += np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
+            costs += self.w_position * np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
                  (20 * (self.desired_s - trajectory.curvilinear.s[-1])) ** 2
 
         # distance costs

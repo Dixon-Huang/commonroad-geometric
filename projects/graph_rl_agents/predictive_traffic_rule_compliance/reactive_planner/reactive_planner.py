@@ -1189,7 +1189,8 @@ class ReactivePlanner(object):
             # check each pose for collisions
 
             # Change: 对于简单的轨迹预测，只检查前10个点
-            for i in range(len(pos1)):
+            # for i in range(len(pos1)):
+            for i in range(20):
             # for i in range(self.collision_check_range):
                 ego = pycrcc.TimeVariantCollisionObject(self.x_0.time_step + i * self.config.planning.factor)
                 ego.append_obstacle(pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i]))
