@@ -869,10 +869,10 @@ class InteractivePlanner:
                     planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=planner.x_0.velocity)
                     self.optimal = planner.plan()
 
-                if self.optimal is None:
-                    logger.warning("Still failed to plan optimal trajectory, use fail-safe cost function")
-                    planner.set_cost_function(DefaultCostFunctionFailSafe())
-                    self.optimal = planner.plan()
+                # if self.optimal is None:
+                #     logger.warning("Still failed to plan optimal trajectory, use fail-safe cost function")
+                #     planner.set_cost_function(DefaultCostFunctionFailSafe())
+                #     self.optimal = planner.plan()
 
                 if self.optimal is None:
                     logger.warning("Failed to plan optimal trajectory with fail-safe cost function, perform emergency brake")
