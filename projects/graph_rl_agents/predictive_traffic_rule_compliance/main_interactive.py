@@ -32,7 +32,7 @@ from commonroad_geometric.learning.reinforcement.observer.implementations.flatte
 from commonroad_geometric.learning.reinforcement.rewarder.reward_aggregator.implementations import SumRewardAggregator
 from commonroad_geometric.simulation.ego_simulation.control_space.implementations.pid_control_space_modified import \
     PIDControlOptions, PIDControlSpace
-from commonroad_geometric.simulation.ego_simulation.ego_vehicle import EgoVehicle, VehicleModel
+# from commonroad_geometric.simulation.ego_simulation.ego_vehicle import EgoVehicle, VehicleModel
 from commonroad_geometric.simulation.ego_simulation.ego_vehicle_simulation import EgoVehicleSimulationOptions
 from commonroad_geometric.simulation.ego_simulation.planning_problem import EgoRoute
 from commonroad_geometric.simulation.ego_simulation.respawning.implementations import (RandomRespawner,
@@ -46,6 +46,7 @@ from commonroad.planning.planning_problem import PlanningProblemSet
 from commonroad_route_planner.route_planner import RoutePlanner
 from projects.graph_rl_agents.predictive_traffic_rule_compliance.reactive_planner.reactive_planner import \
     ReactivePlanner
+# from commonroad_rp.reactive_planner import ReactivePlanner
 from commonroad_geometric.common.config import Config
 from commonroad_rp.utility.visualization import visualize_planner_at_timestep, make_gif
 from commonroad_rp.state import ReactivePlannerState
@@ -87,6 +88,7 @@ from commonroad.common.file_writer import CommonRoadFileWriter, OverwriteExistin
 from commonroad.scenario.scenario import Tag
 from commonroad.common.solution import CommonRoadSolutionReader, VehicleType, VehicleModel, CostFunction
 import commonroad_dc.feasibility.feasibility_checker as feasibility_checker
+from commonroad_dc.feasibility.feasibility_checker import state_transition_feasibility
 from commonroad_dc.feasibility.vehicle_dynamics import VehicleDynamics, VehicleParameterMapping
 # from commonroad_dc.costs.evaluation import CostFunctionEvaluator
 from commonroad_dc.feasibility.solution_checker import valid_solution
@@ -101,6 +103,9 @@ from projects.graph_rl_agents.predictive_traffic_rule_compliance.k_level.utility
     Ipaction
 from commonroad.common.solution import PlanningProblemSolution, Solution, CommonRoadSolutionWriter, VehicleType, \
     VehicleModel, CostFunction
+
+from crmonitor.common.world import World
+from crmonitor.common.vehicle import ControlledVehicle
 
 sys.path.insert(0, os.getcwd())
 
@@ -234,8 +239,11 @@ class InteractivePlanner:
 
     def __init__(self):
         # get current scenario info. from CR
+        self.not_use_world_state = None
+        self.obstacle_id = None
+        self.ego_state = None
+        self.world_state = None
         self.planning_cycle = None
-        self.force_replan = None
         self.close_to_goal = None
         self.optimal = None
         self.brake = None
@@ -256,6 +264,11 @@ class InteractivePlanner:
         self.is_reach_goal_region = False
         self.initial_route = None
         self.route_time_step = 0
+
+        # 添加路口停车相关的状态变量
+        self.intersection_stop_time = 0  # 路口停车计时器
+        self.is_waiting_at_intersection = False  # 是否正在路口等待
+        self.intersection_wait_duration = 0.5  # 路口等待时间(秒)
 
     def check_state(self):
         """check if ego car is straight-going /incoming /in-intersection"""
@@ -442,7 +455,6 @@ class InteractivePlanner:
         )
 
         self.cost_function.w_a = 0
-        # self.planning_cycle = -1
 
     def check_forward_curvature(self, distance: float = 20.0, curvature_threshold: float = 0.05) -> bool:
         """
@@ -706,10 +718,10 @@ class InteractivePlanner:
                     else:
                         desired_velocity = speed_limitation
                 else:
-                    logger.info(f"no speed limitation, set speed limitation to 30")
+                    logger.info(f"no speed limitation, set speed limitation to {max(30, current_speed)}")
                     desired_velocity = max(30, current_speed)
             else:
-                logger.info(f"no speed limitation，set speed limitation to 30")
+                logger.info(f"no speed limitation，set speed limitation to {max(20, current_speed)}")
                 desired_velocity = max(20, current_speed)
 
         except Exception as e:
@@ -720,6 +732,173 @@ class InteractivePlanner:
             desired_velocity = 30
 
         return speed_limitation, desired_velocity
+
+    def check_and_replan_route(self, scenario, planning_problem, planner, current_position) -> bool:
+        """
+        检查当前位置并在必要时重新规划路径
+
+        Args:
+            scenario: 场景对象
+            planning_problem: 规划问题
+            planner: ReactivePlanner实例
+            current_position: 当前位置 [x, y]
+
+        Returns:
+            bool: 是否进行了重新规划
+        """
+        try:
+            lanelet_network = scenario.lanelet_network
+            lanelet_id_ego = None
+
+            # 找到当前位置的所有可能车道
+            potential_ego_lanelet_id_list = lanelet_network.find_lanelet_by_position([current_position])[0]
+
+            # 优先选择规划路径上的车道
+            for idx in potential_ego_lanelet_id_list:
+                if idx in self.lanelet_route:
+                    lanelet_id_ego = idx
+                    break
+
+            # 检查是否需要重新规划
+            route_replanned = False
+            if lanelet_id_ego is None:
+                # 使用当前位置的第一个车道
+                lanelet_id_ego = potential_ego_lanelet_id_list[0]
+
+                # 重新规划路径
+                route_planner = RoutePlanner(scenario.lanelet_network, planning_problem)
+                self.route = route_planner.plan_routes().retrieve_first_route()
+                self.lanelet_route = self.route.lanelet_ids
+
+                # 更新ReactivePlanner的参考路径
+                planner.set_reference_path(self.route.reference_path)
+
+                route_replanned = True
+                logger.info("Route replanned due to vehicle not on planned route")
+
+            # 更新当前车道ID
+            self.lanelet_ego = lanelet_id_ego
+            logger.info(f'current lanelet id: {self.lanelet_ego}')
+
+            return route_replanned
+
+        except Exception as e:
+            logger.warning(f"Route replanning failed: {str(e)}")
+            return False
+
+    def stop_before_intersection(self, scenario, planning_problem, planner, current_position, sumo_ego_vehicle) -> bool:
+        """在接近交叉口时控制车辆停车
+
+        Args:
+            scenario: 场景对象，包含道路网络信息
+            planning_problem: 规划问题对象，包含目标状态信息
+            planner: 规划器对象
+            current_position: 当前位置
+            sumo_ego_vehicle: ego车辆对象
+
+        Returns:
+            bool: 是否成功处理交叉口停车逻辑
+        """
+        try:
+            if sumo_ego_vehicle.current_state.velocity < 0.3:
+                logger.info("车速过低，不执行交叉口停车逻辑，启动车辆")
+                self.brake = False
+                return False
+
+            # 1. 基础检查
+            lanelet_network = scenario.lanelet_network
+            if not lanelet_network.intersections:
+                return False
+
+            # 2. 获取当前位置可能的车道ID
+            potential_ego_lanelet_ids = lanelet_network.find_lanelet_by_position([current_position])[0]
+            if not potential_ego_lanelet_ids:
+                return False
+
+            # 3. 查找交叉口终点
+            lanelet_end_point = None
+            for intersection in lanelet_network.intersections:
+                for incoming in intersection.incomings:
+                    # 检查当前车道是否在交叉口入口车道中
+                    matching_lanelet = next(
+                        (lanelet_id for lanelet_id in incoming.incoming_lanelets
+                         if lanelet_id in potential_ego_lanelet_ids),
+                        None
+                    )
+                    if matching_lanelet:
+                        lanelet = lanelet_network.find_lanelet_by_id(matching_lanelet)
+                        lanelet_end_point = lanelet.center_vertices[-1]
+                        logger.info(f"即将进入交叉口，车道终点: {lanelet_end_point}")
+                        break
+                if lanelet_end_point is not None:
+                    break
+
+            if lanelet_end_point is None:
+                return False
+
+            # 4. 计算关键参数
+            ego_state = sumo_ego_vehicle.current_state
+            distance_to_goal = np.linalg.norm(lanelet_end_point - ego_state.position)
+            ego_velocity = ego_state.velocity
+
+            # 获取目标速度
+            goal_velocity = 0
+
+            # 计算到达时间
+            velocity_diff = ego_velocity - goal_velocity
+            ttc = distance_to_goal / (velocity_diff + 1e-5)  # 防止除零
+
+            # 5. 更新状态和执行停车策略
+            if distance_to_goal < 10:
+                # 非常接近交叉口，执行平滑停车
+                logger.info(f'=== 接近路口 (距离: {distance_to_goal:.2f}m), 规划使用lon_position停车 ===')
+
+                if self.plan_goal_stopping(planner, lanelet_end_point, distance_to_goal, ego_velocity, ttc):
+                    self.brake = True
+                    return True
+                else:
+                    logger.info("平滑停车规划失败，使用常规制动")
+                    self.brake = True
+                    return False
+
+            elif distance_to_goal < ego_velocity * 3 and (ttc < 3 or velocity_diff > 15):
+                # 距离较远但速度过高，需要提前制动
+                logger.info(
+                    f'=== 接近路口 (距离: {distance_to_goal:.2f}m) 速度过高 ({ego_velocity:.2f}m/s), 执行制动 ===')
+                self.brake = True
+                return False
+
+        except Exception as e:
+            logger.warning(f"停车控制失败: {str(e)}")
+            return False
+
+    def compare_states(self, state1, state2, threshold=0.1):
+        """
+        比较两个状态并报告差异
+
+        Args:
+            state1, state2: 要比较的状态
+            threshold: 差异阈值
+        """
+        diff_items = []  # 存储所有超过阈值的项
+
+        # 比较position
+        diff_x = abs(state1.position[0] - state2.position[0])
+        diff_y = abs(state1.position[1] - state2.position[1])
+        if diff_x > threshold:
+            diff_items.append(f"position_x: {diff_x:.6f}")
+        if diff_y > threshold:
+            diff_items.append(f"position_y: {diff_y:.6f}")
+
+        # 比较其他属性
+        for attr in ["steering_angle", "velocity", "orientation", "acceleration", "yaw_rate"]:
+            diff = abs(getattr(state1, attr) - getattr(state2, attr))
+            if diff > threshold:
+                diff_items.append(f"{attr}: {diff:.6f}")
+
+        # 如果有差异，输出警告
+        if diff_items:
+            logger.warning(f"********** Initial state differs in: {', '.join(diff_items)} **********")
 
     def initialize(self, folder_scenarios, name_scenario):
         self.vehicle_type = VehicleType.FORD_ESCORT
@@ -770,9 +949,7 @@ class InteractivePlanner:
         sumo_ego_vehicles = sumo_sim.ego_vehicles
 
         # configure experiment and model
-        experiment_config = configure_experiment(Config(cfg_obj.experiment))
         model_config = configure_model(Config(cfg_obj.model))
-        simulation_options = experiment_config.simulation_options
 
         reactive_planner_config = _dict_to_params(
             OmegaConf.create(model_config.agent_kwargs['actor_options'].reactive_planner_options.as_dict()),
@@ -810,7 +987,7 @@ class InteractivePlanner:
         logger.info("=" * 50 + " Start Simulation " + "=" * 50)
         try:
             for current_count in range(self.num_of_steps):
-            # for current_count in range(0, 300):
+                # for current_count in range(0, 10):
 
                 logger.info(f"process: {current_count}/{self.num_of_steps}")
 
@@ -835,7 +1012,6 @@ class InteractivePlanner:
                                            sumo_ego_vehicle,
                                            current_count,
                                            reactive_planner_config,
-                                           simulation_options,
                                            lanelets_of_goal_position,
                                            planner)
                 self.planning_cycle += 1
@@ -844,6 +1020,17 @@ class InteractivePlanner:
                     f'next ego position: {next_state.position}, next ego steering angle: {next_state.steering_angle}, next ego velocity: {next_state.velocity}')
                 logger.info(
                     f'next ego orientation: {next_state.orientation}, next ego acceleration: {next_state.acceleration}, next yaw rate: {next_state.yaw_rate}')
+
+                feasible, reconstructed_input = state_transition_feasibility(self.ego_state, next_state,
+                                                                             self.vehicle, self.dt)
+                if not feasible:
+                    logger.info("state transition infeasible, trying reconstruct")
+                #     input_vector = Trajectory(initial_time_step=reconstructed_inputs[0].time_step,
+                #                               state_list=reconstructed_inputs)
+                #     return False, input_vector
+                #
+                # input_vector = Trajectory(initial_time_step=reconstructed_inputs[0].time_step,
+                #                           state_list=reconstructed_inputs)
 
                 # ====== paste in simulations
                 # ====== end of motion planner
@@ -882,7 +1069,6 @@ class InteractivePlanner:
             sumo_ego_vehicle,
             current_count,
             reactive_planner_config,
-            simulation_options,
             lanelets_of_goal_position,
             planner
     ):
@@ -891,45 +1077,16 @@ class InteractivePlanner:
         logger.info(
             f"ego orientation: {sumo_ego_vehicle.current_state.orientation}, ego acceleration: {sumo_ego_vehicle.current_state.acceleration}, yaw rate: {sumo_ego_vehicle.current_state.yaw_rate}")
 
-        planning_problem = list(planning_problem_set.planning_problem_dict.values())[0]
-        lanelet_network = scenario.lanelet_network
-        lanelet_id_ego = None
-        # 找到当前车道
-        potential_ego_lanelet_id_list = lanelet_network.find_lanelet_by_position(
-            [sumo_ego_vehicle.current_state.position])[0]
-        # 优先使用规划路径上的车道
-        for idx in potential_ego_lanelet_id_list:
-            if idx in self.lanelet_route:
-                lanelet_id_ego = idx
-                break
-        route_replan = False
-        # 处理在其他车道超车的情况
-        if lanelet_id_ego is None:
-            lanelet_id_ego = potential_ego_lanelet_id_list[0]
-            route_replan = True
-        self.lanelet_ego = lanelet_id_ego
-        logger.info(f'current lanelet id: {self.lanelet_ego}')
-        # 获取当前车道信息
-        current_lanelet = lanelet_network.find_lanelet_by_id(self.lanelet_ego)
-
-        if route_replan:
-            route_planning_problem = copy.deepcopy(planning_problem)
-            route_planning_problem.initial_state.position = sumo_ego_vehicle.current_state.position
-            route_planner = RoutePlanner(scenario.lanelet_network, route_planning_problem)
-            self.route = route_planner.plan_routes().retrieve_first_route()
-            self.lanelet_route = self.route.lanelet_ids
-            planner.set_reference_path(self.route.reference_path)
-
         # 判断是否到达目标
         try:
             if not self.is_reach_goal_region:
-                self.is_reach_goal_region = self.check_goal_state(sumo_ego_vehicle.current_state.position, lanelets_of_goal_position)
+                self.is_reach_goal_region = self.check_goal_state(sumo_ego_vehicle.current_state.position,
+                                                                  lanelets_of_goal_position)
         except:
             pass
 
         # 接近目标刹车
         self.brake = False
-
         if self.is_reach_goal_region:
             logger.info('*** 到达目标 ***')
             self.planning_cycle = 0
@@ -943,38 +1100,77 @@ class InteractivePlanner:
             # 如果到达目标且速度不为0，执行停车
             self.brake = True
 
-        # 接近目标减速
-        if 'position' not in planning_problem.goal.state_list[0].__dict__.keys():
-            # 如果没有位置目标，直接跳过位置相关判断
-            pass
-        elif 'velocity' not in planning_problem.goal.state_list[0].__dict__.keys():
-            if 'time_step' in planning_problem.goal.state_list[0].__dict__.keys():
-                if planning_problem.goal.state_list[0].time_step.start > 50:
-                    # 处理目标位置相关的停车规划
-                    next_state = self.process_goal_position(planning_problem, sumo_ego_vehicle, planner, current_count)
-                    if next_state is not None:
-                        return next_state
-        else:
-            # 处理目标位置相关的停车规划
-            next_state = self.process_goal_position(planning_problem, sumo_ego_vehicle, planner, current_count)
-            if next_state is not None:
-                return next_state
+        # 检查并重新规划路径
+        planning_problem = list(planning_problem_set.planning_problem_dict.values())[0]
+        self.check_and_replan_route(
+            scenario,
+            planning_problem,
+            planner,
+            sumo_ego_vehicle.current_state.position
+        )
+        current_lanelet = scenario.lanelet_network.find_lanelet_by_id(self.lanelet_ego)
 
         # check if planning cycle or not
         plan_new_trajectory = self.planning_cycle % reactive_planner_config.planning.replanning_frequency == 0
 
-        if plan_new_trajectory or self.force_replan:
-            self.force_replan = False
+        if plan_new_trajectory:
+
+            # 接近目标减速
+            if 'position' not in planning_problem.goal.state_list[0].__dict__.keys():
+                # 如果没有位置目标，直接跳过位置相关判断
+                pass
+            elif 'velocity' not in planning_problem.goal.state_list[0].__dict__.keys():
+                if 'time_step' in planning_problem.goal.state_list[0].__dict__.keys():
+                    if planning_problem.goal.state_list[0].time_step.start > 50:
+                        # 处理目标位置相关的停车规划
+                        next_state = self.process_goal_position(planning_problem, sumo_ego_vehicle, planner,
+                                                                current_count)
+                        if next_state is not None:
+                            return next_state
+            else:
+                # 处理目标位置相关的停车规划
+                next_state = self.process_goal_position(planning_problem, sumo_ego_vehicle, planner, current_count)
+                if next_state is not None:
+                    return next_state
+
+            # 处理交叉口停车
+            close_to_intersection = False
+            # close_to_intersection = self.stop_before_intersection(scenario, planning_problem, planner,
+            #                                                       sumo_ego_vehicle.current_state.position,
+            #                                                       sumo_ego_vehicle)
+            # logger.info(f"=== close_to_intersection: {close_to_intersection} ===")
 
             # 获取限速
-            speed_limitation, desired_velocity = self.get_speed_limitation(scenario, current_lanelet, planner.x_0.velocity)
+            speed_limitation, desired_velocity = self.get_speed_limitation(scenario, current_lanelet,
+                                                                           planner.x_0.velocity)
 
+            # 设置cost function
             if not self.is_reach_goal_region and not self.brake and not self.close_to_goal:
-                planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
+
+                # 获取wrold state用于robustness计算
+                ego_dynamic_obstacle = None
+                # try:
+                #     if current_count > 0 and not self.not_use_world_state:
+                #         ego_dynamic_obstacle = sumo_ego_vehicle.get_dynamic_obstacle()
+                #         self.obstacle_id = ego_dynamic_obstacle.obstacle_id
+                #         self.world_state = World.create_from_scenario(scenario)
+                #         self.world_state.add_controlled_vehicle(
+                #             self.scenario, copy.deepcopy(ego_dynamic_obstacle)
+                #         )
+                #         logger.info("获取world state成功")
+                # except Exception as e:
+                #     logger.info(f"*** failed to create world state ***")
+                #     logger.info("Error: " + str(e))
+                #     self.world_state = None
+                #     self.not_use_world_state = True
+
+                planner.set_cost_function(BaselineCostFunction(desired_speed=planner.desired_speed,
                                                                desired_d=0.0,
                                                                desired_s=planner.desired_lon_position,
-                                                               # simulation=simulation,
-                                                               # ego_vehicle=ego_vehicle,
+                                                               world_state=self.world_state,
+                                                               obstacle_id=self.obstacle_id,
+                                                               vehicle=self.vehicle,
+                                                               ego_dynamic_obstacle=copy.deepcopy(ego_dynamic_obstacle),
                                                                speed_limitation=speed_limitation if speed_limitation else None,
                                                                scenario=scenario,
                                                                current_time_step=current_count,
@@ -989,7 +1185,7 @@ class InteractivePlanner:
                 planner.set_desired_curve_velocity(current_speed=planner.x_0.velocity,
                                                    desired_velocity=desired_velocity)
 
-            elif self.close_to_goal:
+            elif self.close_to_goal or close_to_intersection:
                 pass
 
             else:
@@ -1016,7 +1212,7 @@ class InteractivePlanner:
                     self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config,
                                               current_count)
                     self.visualize_trajectory(rp_failure_ego_vehicle, planner, reactive_planner_config,
-                                              current_count + 20)
+                                              current_count + 10)
                 except Exception as e:
                     logger.warning(f"visualize failed trajectory failed")
                     logger.warning(f"failed reason: {e}")
@@ -1044,25 +1240,26 @@ class InteractivePlanner:
                 else:
                     logger.warning("All infeasible trajectories are due to kinematic constraints")
                     planner.set_cost_function(DefaultCostFunction())
-                    planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=planner.x_0.velocity)
+                    planner.set_desired_velocity(current_speed=planner.x_0.velocity,
+                                                 desired_velocity=planner.x_0.velocity)
                     self.optimal = planner.plan()
-
-                # if self.optimal is None:
-                #     logger.warning("Still failed to plan optimal trajectory, use fail-safe cost function")
-                #     planner.set_cost_function(DefaultCostFunctionFailSafe())
-                #     self.optimal = planner.plan()
 
                 if self.optimal is None:
                     # logger.warning("Failed to plan optimal trajectory with fail-safe cost function, perform emergency brake")
                     next_state = self.emergency_brake(current_count)
-                    next_state_shifted = next_state.translate_rotate(np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
-                                                                               -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
-                                                                     0.0)
+                    next_state_shifted = next_state.translate_rotate(
+                        np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
+                                  -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
+                        0.0)
                     planner.record_state_and_input(next_state_shifted)
                     planner.reset(initial_state_cart=planner.record_state_list[-1],
                                   collision_checker=planner.collision_checker,
                                   coordinate_system=planner.coordinate_system)
                     return next_state
+
+            logger.info(f"x_0_initial: {planner.x_0}")
+            logger.info(f"x_0_planned: {self.optimal[0].state_list[0]}")
+            self.compare_states(planner.x_0, self.optimal[0].state_list[0])
 
             # Normal process
             # record state and input
@@ -1111,8 +1308,8 @@ def main(cfg: RLProjectConfig):
 
     # folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
     # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
-    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
-    # folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
+    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
+    folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
 
     # name_scenario = "DEU_Frankfurt-73_2_I-1" # 无法加载
     # name_scenario = "DEU_Frankfurt-95_6_I-1" # OK
@@ -1121,8 +1318,8 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Frankfurt-152_8_I-1" # 无法到达终点
     # name_scenario = "ESP_Mad-2_1_I-1-1" # OK
 
-    # name_scenario = "DEU_Cologne-63_5_I-1"
-    # name_scenario = "DEU_Frankfurt-34_11_I-1"
+    # name_scenario = "DEU_Cologne-63_5_I-1" # OK
+    # name_scenario = "DEU_Frankfurt-34_11_I-1" # 无法加在
     # name_scenario = "DEU_Aachen-2_1_I-1"
     # name_scenario = "DEU_Aachen-3_1_I-1" # OK
 
@@ -1136,17 +1333,18 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Muc-4_2_I-1-1" # OK
     # name_scenario = "ZAM_Tjunction-1_32_I-1-1"
     # name_scenario = "ZAM_Zip-1_69_I-1-1" # OK
-    name_scenario = "ZAM_ACC-1_3_I-1-1" # 轨迹不太可行
-    # name_scenario = "DEU_A9-1_2_I-1-1" # 撞了前面的车
+    # name_scenario = "ZAM_ACC-1_3_I-1-1" # OK
+    # name_scenario = "DEU_A9-1_2_I-1-1" # OK
     # name_scenario = "ZAM_Tjunction-1_258_I-1-1"  # 解不了
     # name_scenario = "ZAM_Tjunction-1_110_I-1-1"
-    # name_scenario = "ZAM_Tjunction-1_75_I-1-1"  # 修改了intersection信息
+    # name_scenario = "ZAM_Tjunction-1_75_I-1-1"  # 修改了intersection信息**
     # name_scenario = "DEU_Gar-1_2_I-1-1" # OK
+    # name_scenario = "ZAM_Merge-1_1_I-1-1"
 
     # name_scenario = "DEU_Aachen-3_1_I-1" # OK
     # name_scenario = "DEU_Aachen-3_2_I-1" # OK
     # name_scenario = "DEU_Aachen-3_3_I-1" # OK
-    # name_scenario = "DEU_Aachen-3_7_I-1" # 38的时候feasible失败
+    name_scenario = "DEU_Aachen-3_7_I-1"  # 38的时候feasible失败
     # name_scenario = "DEU_Aachen-29_9_I-1" # OK
     # name_scenario = "DEU_Cologne-21_1_I-1"
     # name_scenario = "DEU_Cologne-63_8_I-1" # OK
@@ -1187,7 +1385,9 @@ def main(cfg: RLProjectConfig):
 
     feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
                                                                                 main_planner.vehicle,
-                                                                                main_planner.dt)
+                                                                                main_planner.dt,
+                                                                                e=np.array([5e-2, 5e-2, 5e-2])
+                                                                                )
     logger.info('Feasible? {}'.format(feasible))
     if not feasible:
         logger.info(f'infeasible point: {len(reconstructed_inputs.state_list)}')
@@ -1222,13 +1422,6 @@ def motion_planner_interactive(scenario_path: str, cfg: RLProjectConfig) -> Solu
 
     sumo_sim = main_planner.initialize(folder_scenarios, name_scenario)
     simulated_scenario, ego_vehicles = main_planner.process(sumo_sim, cfg_obj)
-
-    # get feasible trajectory
-    ego_vehicle = list(ego_vehicles.values())[0]
-    trajectory = ego_vehicle.driven_trajectory.trajectory
-    feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
-                                                                                main_planner.vehicle,
-                                                                                main_planner.dt)
 
     planning_problem_set = main_planner.planning_problem_set
     vehicle_type = main_planner.vehicle_type

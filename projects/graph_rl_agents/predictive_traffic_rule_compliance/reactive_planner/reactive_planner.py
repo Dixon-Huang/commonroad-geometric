@@ -221,6 +221,7 @@ class ReactivePlanner(object):
             self.x_0 = initial_state_cart if initial_state_cart is not None else self.x_0
 
         # convert Cartesian initial state or pass given curvilinear initial state
+
         self.x_0_cl = initial_state_curv if initial_state_curv is not None else self._compute_initial_states(self.x_0)
 
     def set_collision_checker(self, scenario: Scenario = None, collision_checker: pycrcc.CollisionChecker = None,
@@ -619,6 +620,7 @@ class ReactivePlanner(object):
         logger.info(f"==== Initial state Curvilinear ====")
         logger.info(f"longitudinal state = {x_0_lon}")
         logger.info(f"lateral state = {x_0_lat}")
+        logger.info(f"real initial curvature = {self._compute_initial_states(self.x_0)}")
         logger.info(f"==== Target states ====")
         logger.info(f"longitudinal driving mode: {self.config.sampling.longitudinal_mode}")
         logger.info(f"desired velocity: {self._desired_speed} m/s")
@@ -1190,7 +1192,8 @@ class ReactivePlanner(object):
 
             # Change: 对于简单的轨迹预测，只检查前10个点
             # for i in range(len(pos1)):
-            for i in range(20):
+            for i in range(round(len(pos1) / 3)):
+            # for i in range(20):
             # for i in range(self.collision_check_range):
                 ego = pycrcc.TimeVariantCollisionObject(self.x_0.time_step + i * self.config.planning.factor)
                 ego.append_obstacle(pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i]))
@@ -1204,7 +1207,9 @@ class ReactivePlanner(object):
             if self.config.planning.continuous_collision_check and not collide:
                 ego_tvo = pycrcc.TimeVariantCollisionObject(self.x_0.time_step)
                 [ego_tvo.append_obstacle(
-                    pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(len(pos1))]
+                    # Change
+                    # pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(len(pos1))]
+                    pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(round(len(pos1) / 3))]
                 ego_tvo, err = trajectory_preprocess_obb_sum(ego_tvo)
                 if self._cc.collide(ego_tvo):
                     self._infeasible_count_collision += 1
@@ -1302,7 +1307,7 @@ class ReactivePlanner(object):
 
     def calculate_safe_speed(self, curvature: float,
                              current_velocity: float,
-                             max_lateral_acc: float = 2) -> float:
+                             max_lateral_acc: float = 1) -> float:
         """
         基于曲率计算安全速度
         Args:
@@ -1323,7 +1328,7 @@ class ReactivePlanner(object):
 
     def calculate_braking_distance(self, current_speed: float,
                                    target_speed: float,
-                                   comfortable_decel: float = 1.5) -> float:
+                                   comfortable_decel: float = 4) -> float:
         """
         计算舒适减速所需距离
         """
@@ -1336,7 +1341,7 @@ class ReactivePlanner(object):
         # 计算减速距离
         braking_distance = (current_speed ** 2 - target_speed ** 2) / (2 * decel)
 
-        # 添加安全余量(1秒车头时距)
+        # 添加安全余量
         safety_margin = current_speed * self.config.planning.replanning_frequency * self.config.planning.dt * 1.2
 
         return braking_distance + safety_margin
@@ -1351,11 +1356,11 @@ class ReactivePlanner(object):
             current_index = self.find_current_index()
 
             # 分析前方曲率
-            max_curvature, distance_to_curve = self.analyze_upcoming_curvature(current_index)
+            max_curvature, distance_to_curve = self.analyze_upcoming_curvature(current_index, round(current_speed * self.config.planning.time_steps_computation))
 
-            if max_curvature > 0.15:
+            if max_curvature > 0.1:
                 # 计算安全速度
-                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=6)
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=2)
 
                 # 计算需要的减速距离
                 braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
@@ -1375,8 +1380,8 @@ class ReactivePlanner(object):
                 if actual_distance < self.config.planning.time_steps_computation * self.dt * safe_speed * 3:
                     self.cost_function.w_velocity = 1e2
                     self.cost_function.w_low_speed = 0
-                    desired_velocity = safe_speed
-                    logger.info(f"Ignoring low speed cost function")
+                    desired_velocity = safe_speed / 1.5
+                    logger.info(f"Ignoring low speed cost function and setting target speed to {desired_velocity:.2f} m/s")
 
                 logger.info(f"Max curvature: {max_curvature:.2f}")
                 logger.info(f"Distance to curve: {actual_distance:.2f} m")

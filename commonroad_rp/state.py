@@ -50,8 +50,7 @@ class ReactivePlannerState(KSState):
 
         # remove slip angle
         if hasattr(initial_state, "slip_angle"):
-            if initial_state.slip_angle is not None:  # Change: remove slip angle if not None
-                delattr(initial_state, "slip_angle")
+            delattr(initial_state, "slip_angle")
 
         # shift initial position from center to rear axle
         orientation = initial_state.orientation

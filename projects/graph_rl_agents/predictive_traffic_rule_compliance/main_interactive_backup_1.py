@@ -961,13 +961,13 @@ class InteractivePlanner:
                     planner.set_reference_path(route.reference_path)
 
                     if not self.is_reach_goal_region and not self.brake:
-                        # planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
-                        #                                                desired_d=0.0,
-                        #                                                desired_s=planner.desired_lon_position,
-                        #                                                simulation=simulation,
-                        #                                                ego_vehicle=ego_vehicle,
-                        #                                                speed_limitation=speed_limitation if speed_limitation else None
-                        #                                                ))
+                        planner.set_cost_function(BaselineCostFunction(planner.desired_speed,
+                                                                       desired_d=0.0,
+                                                                       desired_s=planner.desired_lon_position,
+                                                                       simulation=simulation,
+                                                                       ego_vehicle=ego_vehicle,
+                                                                       speed_limitation=speed_limitation if speed_limitation else None
+                                                                       ))
                         planner.x_0.steering_angle = sumo_ego_vehicle.current_state.steering_angle
                         planner.x_0.yaw_rate = sumo_ego_vehicle.current_state.yaw_rate
 
