@@ -1190,43 +1190,43 @@ def main(cfg: RLProjectConfig):
                  True,
                  "_planner")
 
-    # try:
-    #     feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
-    #                                                                                 main_planner.vehicle,
-    #                                                                                 main_planner.dt)
-    #     global_feasible = copy.deepcopy(feasible)
-    #     logger.info('Global Feasible? {}'.format(global_feasible))
-    #     logger.info(f"{len(reconstructed_inputs.state_list)} states reconstructed")
-    #     global_recon_num += 1
-    #     recon_num = 0
-    #     while not (feasible or recon_num >= 5):
-    #         recon_num += 1
-    #         # if not feasible. reconstruct the inputs
-    #         initial_state = trajectory.state_list[0]
-    #         vehicle = VehicleDynamics.KS(VehicleType.FORD_ESCORT)
-    #         dt = 0.1
-    #         reconstructed_states = [vehicle.convert_initial_state(initial_state)] + [
-    #             vehicle.simulate_next_state(trajectory.state_list[idx], inp, dt)
-    #             for idx, inp in enumerate(reconstructed_inputs.state_list)
-    #         ]
-    #         trajectory_reconstructed = Trajectory(initial_time_step=0, state_list=reconstructed_states)
-    #
-    #         for i, state in enumerate(trajectory_reconstructed.state_list):
-    #             # ego_vehicle.driven_trajectory.trajectory.state_list[i] = state
-    #             target_states = [state for state in ego_vehicle.driven_trajectory.trajectory.state_list if
-    #                              state.time_step == i]
-    #             if target_states:
-    #                 target_state = target_states[0]
-    #                 target_state.position = state.position
-    #                 target_state.steering_angle = state.steering_angle
-    #                 target_state.velocity = state.velocity
-    #                 target_state.orientation = state.orientation
-    #         feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory_reconstructed,
-    #                                                                                     main_planner.vehicle,
-    #                                                                                     main_planner.dt)
-    #         logger.info('after recon, Local Feasible? {}'.format(feasible))
-    # except Exception as e:
-    #     logger.warning(e)
+    try:
+        feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
+                                                                                    main_planner.vehicle,
+                                                                                    main_planner.dt)
+        global_feasible = copy.deepcopy(feasible)
+        logger.info('Global Feasible? {}'.format(global_feasible))
+        logger.info(f"{len(reconstructed_inputs.state_list)} states reconstructed")
+        global_recon_num += 1
+        recon_num = 0
+        while not (feasible or recon_num >= 5):
+            recon_num += 1
+            # if not feasible. reconstruct the inputs
+            initial_state = trajectory.state_list[0]
+            vehicle = VehicleDynamics.KS(VehicleType.FORD_ESCORT)
+            dt = 0.1
+            reconstructed_states = [vehicle.convert_initial_state(initial_state)] + [
+                vehicle.simulate_next_state(trajectory.state_list[idx], inp, dt)
+                for idx, inp in enumerate(reconstructed_inputs.state_list)
+            ]
+            trajectory_reconstructed = Trajectory(initial_time_step=0, state_list=reconstructed_states)
+
+            for i, state in enumerate(trajectory_reconstructed.state_list):
+                # ego_vehicle.driven_trajectory.trajectory.state_list[i] = state
+                target_states = [state for state in ego_vehicle.driven_trajectory.trajectory.state_list if
+                                 state.time_step == i]
+                if target_states:
+                    target_state = target_states[0]
+                    target_state.position = state.position
+                    target_state.steering_angle = state.steering_angle
+                    target_state.velocity = state.velocity
+                    target_state.orientation = state.orientation
+            feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory_reconstructed,
+                                                                                        main_planner.vehicle,
+                                                                                        main_planner.dt)
+            logger.info('after recon, Local Feasible? {}'.format(feasible))
+    except Exception as e:
+        logger.warning(e)
 
     feasible, reconstructed_inputs = feasibility_checker.trajectory_feasibility(trajectory,
                                                                                 main_planner.vehicle,

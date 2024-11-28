@@ -1360,7 +1360,7 @@ class ReactivePlanner(object):
 
             if max_curvature > 0.1:
                 # 计算安全速度
-                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=2)
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=6)
 
                 # 计算需要的减速距离
                 braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
@@ -1483,9 +1483,9 @@ class ReactivePlanner(object):
         - 高速时 factor < 1.0 (收紧约束)
         """
 
-        if velocity <= 1.0:  # 低速
-            return 1.0  # 放松约束
-        elif velocity <= 10.0:  # 中速
+        if velocity <= 3:  # 低速
+            return 1.5  # 放松约束
+        elif 3 < velocity <= 10.0:  # 中速
             return 1.0
         else:  # 高速
             # return 0.7 * (v_ref / velocity)  # 速度越高约束越严
@@ -1506,7 +1506,7 @@ class ReactivePlanner(object):
         kappa_max = np.tan(self.vehicle_params.delta_max) / self.vehicle_params.wheelbase
 
         if "kappa" in self.config.planning.constraints_to_check:
-            if abs(kappa_gl[i]) > kappa_max * 1:
+            if abs(kappa_gl[i]) > kappa_max:
                 self._infeasible_reason_dict["kappa"] += 1
                 return False
 
@@ -1515,7 +1515,7 @@ class ReactivePlanner(object):
             yaw_rate = (theta_gl[i] - theta_gl[i - 1]) / self.dt if i > 0 else 0.
             theta_dot_max = kappa_max * v[i]
 
-            if abs(round(yaw_rate, 5)) > theta_dot_max * 1:
+            if abs(round(yaw_rate, 5)) > theta_dot_max * velocity_factor:
                 self._infeasible_reason_dict["yaw_rate"] += 1
                 return False
 
@@ -1526,7 +1526,7 @@ class ReactivePlanner(object):
                                                                     math.cos(steering_angle) ** 2)
 
             kappa_dot = (kappa_gl[i] - kappa_gl[i - 1]) / self.dt if i > 0 else 0.
-            if abs(kappa_dot) > kappa_dot_max * velocity_factor * 1:
+            if abs(kappa_dot) > kappa_dot_max * velocity_factor * velocity_factor:
                 self._infeasible_reason_dict["kappa_dot"] += 1
                 return False
 
@@ -1535,234 +1535,11 @@ class ReactivePlanner(object):
             v_switch = self.vehicle_params.v_switch
             a_max = self.vehicle_params.a_max * v_switch / v[i] if v[i] > v_switch else self.vehicle_params.a_max
             a_min = -self.vehicle_params.a_max
-            a_max = a_max * velocity_factor * 1  # 根据速度调整约束
-            a_min = a_min * velocity_factor * 1  # 根据速度调整约束
+            a_max = a_max * velocity_factor  # 根据速度调整约束
+            a_min = a_min * velocity_factor  # 根据速度调整约束
 
             if not a_min <= a[i] <= a_max:
                 self._infeasible_reason_dict["acceleration"] += 1
                 return False
 
         return True
-
-    # def _create_trajectory_bundle(self, x_0_lon: np.array, x_0_lat: np.array, samp_level: int) -> TrajectoryBundle:
-    #     """
-    #     改进的轨迹生成策略
-    #
-    #     Args:
-    #         x_0_lon: 纵向初始状态 [s, s_dot, s_ddot]
-    #         x_0_lat: 横向初始状态 [d, d_dot, d_ddot]
-    #         samp_level: 采样等级
-    #     """
-    #     logger.info("===== Sampling trajectories ... =====")
-    #     logger.info(f"Sampling density {samp_level + 1} of {self.sampling_level}")
-    #
-    #     trajectories = []
-    #     base_num_samples = 30 * (samp_level + 1)  # 基础采样数量
-    #
-    #     # 1. 分析当前状态
-    #     current_velocity = x_0_lon[1]  # 当前速度
-    #     current_acc = x_0_lon[2]  # 当前加速度
-    #     lateral_offset = x_0_lat[0]  # 当前横向偏差
-    #     lateral_vel = x_0_lat[1]  # 当前横向速度
-    #
-    #     # 2. 根据场景选择采样策略
-    #     if current_velocity < 1.0:  # 低速场景
-    #         trajectories.extend(
-    #             self._generate_low_speed_trajectories(
-    #                 x_0_lon, x_0_lat, base_num_samples, samp_level
-    #             )
-    #         )
-    #     elif abs(current_velocity - self._desired_speed) > 2.0:  # 速度调整场景
-    #         trajectories.extend(
-    #             self._generate_speed_adjustment_trajectories(
-    #                 x_0_lon, x_0_lat, base_num_samples, samp_level
-    #             )
-    #         )
-    #     elif abs(lateral_offset) > 0.3 or abs(lateral_vel) > 0.2:  # 横向调整场景
-    #         trajectories.extend(
-    #             self._generate_lateral_adjustment_trajectories(
-    #                 x_0_lon, x_0_lat, base_num_samples, samp_level
-    #             )
-    #         )
-    #     else:  # 正常巡航场景
-    #         trajectories.extend(
-    #             self._generate_cruise_trajectories(
-    #                 x_0_lon, x_0_lat, base_num_samples, samp_level
-    #             )
-    #         )
-    #
-    #     # 3. 添加一些默认轨迹以增加多样性
-    #     default_trajectories = self.sampling_space.generate_trajectories_at_level(
-    #         samp_level, x_0_lon, x_0_lat,
-    #         self.config.sampling.longitudinal_mode,
-    #         self._low_vel_mode
-    #     )
-    #     trajectories.extend(default_trajectories)
-    #
-    #     # 4. 创建轨迹束
-    #     trajectory_bundle = TrajectoryBundle(trajectories, cost_function=self.cost_function)
-    #     logger.info(f"Number of trajectory samples: {len(trajectory_bundle.trajectories)}")
-    #
-    #     return trajectory_bundle
-
-    def _generate_low_speed_trajectories(self, x_0_lon, x_0_lat, num_samples, samp_level):
-        """生成低速场景的轨迹"""
-        # 保存原始采样参数
-        original_v_max = self.sampling_space.samples_v.max_bound
-        original_d_max = self.sampling_space.samples_d.max_bound
-        original_t_max = self.sampling_space.samples_t.max_bound
-
-        try:
-            # 调整采样参数
-            self.sampling_space.samples_v = VelocitySampling(
-                v_min=0.0,
-                v_max=min(2.0, self._desired_speed),
-                num_samples=samp_level
-            )
-            self.sampling_space.samples_d = PositionSampling(
-                d_min=-0.3,
-                d_max=0.3,
-                num_samples=samp_level
-            )
-            self.sampling_space.samples_t = TimeSampling(
-                t_min=1.0,
-                t_max=self.horizon * 0.7,  # 缩短时间范围增加控制精度
-                num_samples=samp_level,
-                dt=self.dt
-            )
-
-            return self.sampling_space.generate_trajectories_at_level(
-                samp_level, x_0_lon, x_0_lat,
-                self.config.sampling.longitudinal_mode,
-                self._low_vel_mode,
-                num_samples
-            )
-        finally:
-            # 恢复原始采样参数
-            self.sampling_space.samples_v.max_bound = original_v_max
-            self.sampling_space.samples_d.max_bound = original_d_max
-            self.sampling_space.samples_t.max_bound = original_t_max
-
-    def _generate_speed_adjustment_trajectories(self, x_0_lon, x_0_lat, num_samples, samp_level):
-        """生成速度调整场景的轨迹"""
-        current_velocity = x_0_lon[1]
-        velocity_diff = self._desired_speed - current_velocity
-
-        # 保存原始采样参数
-        original_params = {
-            'v_min': self.sampling_space.samples_v.min_bound,
-            'v_max': self.sampling_space.samples_v.max_bound,
-            't_min': self.sampling_space.samples_t.min_bound,
-            't_max': self.sampling_space.samples_t.max_bound
-        }
-
-        try:
-            if velocity_diff > 0:  # 需要加速
-                # 计算合理的速度范围
-                v_min = max(0, current_velocity - 1.0)  # 允许略微减速
-                v_max = min(current_velocity + 2.0, self._desired_speed * 1.1)
-
-                # 设置采样参数偏向加速
-                self.sampling_space.samples_v = VelocitySampling(v_min, v_max, samp_level)
-                self.sampling_space.samples_t = TimeSampling(
-                    self.dt * 5,  # 较短的时间范围
-                    self.horizon,
-                    samp_level,
-                    self.dt
-                )
-            else:  # 需要减速
-                # 计算合理的速度范围
-                v_min = max(0, self._desired_speed * 0.9)
-                v_max = min(current_velocity, self._desired_speed * 1.1)
-
-                # 设置采样参数偏向减速
-                self.sampling_space.samples_v = VelocitySampling(v_min, v_max, samp_level)
-                self.sampling_space.samples_t = TimeSampling(
-                    self.dt * 10,  # 较长的时间范围允许平缓减速
-                    self.horizon * 1.2,
-                    samp_level,
-                    self.dt
-                )
-
-            return self.sampling_space.generate_trajectories_at_level(
-                samp_level, x_0_lon, x_0_lat,
-                self.config.sampling.longitudinal_mode,
-                self._low_vel_mode,
-                num_samples
-            )
-        finally:
-            # 恢复原始采样参数
-            self.sampling_space.samples_v.min_bound = original_params['v_min']
-            self.sampling_space.samples_v.max_bound = original_params['v_max']
-            self.sampling_space.samples_t.min_bound = original_params['t_min']
-            self.sampling_space.samples_t.max_bound = original_params['t_max']
-
-    def _generate_lateral_adjustment_trajectories(self, x_0_lon, x_0_lat, num_samples, samp_level):
-        """生成横向调整场景的轨迹"""
-        lateral_offset = x_0_lat[0]
-        lateral_vel = x_0_lat[1]
-
-        # 保存原始采样参数
-        original_d_max = self.sampling_space.samples_d.max_bound
-        original_t_max = self.sampling_space.samples_t.max_bound
-
-        try:
-            # 根据当前横向状态调整采样范围
-            d_max = max(0.5, abs(lateral_offset) * 1.5)  # 略大于当前偏差
-            d_min = -d_max
-
-            self.sampling_space.samples_d = PositionSampling(d_min, d_max, samp_level)
-
-            # 如果横向速度较大,增加时间范围以实现平滑调整
-            if abs(lateral_vel) > 0.3:
-                self.sampling_space.samples_t = TimeSampling(
-                    self.dt * 5,
-                    self.horizon * 1.2,
-                    samp_level,
-                    self.dt
-                )
-
-            return self.sampling_space.generate_trajectories_at_level(
-                samp_level, x_0_lon, x_0_lat,
-                self.config.sampling.longitudinal_mode,
-                self._low_vel_mode,
-                num_samples
-            )
-        finally:
-            # 恢复原始采样参数
-            self.sampling_space.samples_d.max_bound = original_d_max
-            self.sampling_space.samples_t.max_bound = original_t_max
-
-    def _generate_cruise_trajectories(self, x_0_lon, x_0_lat, num_samples, samp_level):
-        """生成巡航场景的轨迹"""
-        current_velocity = x_0_lon[1]
-
-        # 保存原始采样参数
-        original_params = {
-            'v_min': self.sampling_space.samples_v.min_bound,
-            'v_max': self.sampling_space.samples_v.max_bound,
-            'd_max': self.sampling_space.samples_d.max_bound
-        }
-
-        try:
-            # 在巡航模式下使用较窄的速度范围
-            v_min = max(0, current_velocity - 0.5)
-            v_max = min(current_velocity + 0.5, self._desired_speed * 1.05)
-            self.sampling_space.samples_v = VelocitySampling(v_min, v_max, samp_level)
-
-            # 使用较小的横向范围
-            self.sampling_space.samples_d = PositionSampling(
-                -0.3, 0.3, samp_level
-            )
-
-            return self.sampling_space.generate_trajectories_at_level(
-                samp_level, x_0_lon, x_0_lat,
-                self.config.sampling.longitudinal_mode,
-                self._low_vel_mode,
-                num_samples
-            )
-        finally:
-            # 恢复原始采样参数
-            self.sampling_space.samples_v.min_bound = original_params['v_min']
-            self.sampling_space.samples_v.max_bound = original_params['v_max']
-            self.sampling_space.samples_d.max_bound = original_params['d_max']

@@ -786,7 +786,7 @@ class InteractivePlanner:
             logger.warning(f"Route replanning failed: {str(e)}")
             return False
 
-    def stop_before_intersection(self, scenario, planning_problem, planner, current_position, sumo_ego_vehicle) -> bool:
+    def stop_before_intersection(self, scenario, planner, current_position, sumo_ego_vehicle) -> bool:
         """在接近交叉口时控制车辆停车
 
         Args:
@@ -800,7 +800,7 @@ class InteractivePlanner:
             bool: 是否成功处理交叉口停车逻辑
         """
         try:
-            if sumo_ego_vehicle.current_state.velocity < 0.3:
+            if sumo_ego_vehicle.current_state.velocity < 1:
                 logger.info("车速过低，不执行交叉口停车逻辑，启动车辆")
                 self.brake = False
                 return False
@@ -1025,12 +1025,29 @@ class InteractivePlanner:
                                                                              self.vehicle, self.dt)
                 if not feasible:
                     logger.info("state transition infeasible, trying reconstruct")
-                #     input_vector = Trajectory(initial_time_step=reconstructed_inputs[0].time_step,
-                #                               state_list=reconstructed_inputs)
-                #     return False, input_vector
-                #
-                # input_vector = Trajectory(initial_time_step=reconstructed_inputs[0].time_step,
-                #                           state_list=reconstructed_inputs)
+                    vehicle = self.vehicle
+                    next_state_reconstructed = vehicle.simulate_next_state(self.ego_state, reconstructed_input, self.dt)
+                    logger.info(f"reconstructed state: {next_state_reconstructed}")
+                    # feasible, _ = state_transition_feasibility(self.ego_state, next_state_reconstructed, vehicle, self.dt)
+                    # logger.info(f"feasible: {feasible}")
+
+                    next_state.position = next_state_reconstructed.position
+                    next_state.velocity = next_state_reconstructed.velocity
+                    next_state.orientation = next_state_reconstructed.orientation
+                    next_state.steering_angle = next_state_reconstructed.steering_angle
+
+                    next_state_shifted = next_state.translate_rotate(
+                        np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
+                                  -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
+                        0.0)
+                    planner.record_input_list.pop()
+                    planner.record_state_list.pop()
+                    planner.record_state_and_input(next_state_shifted)
+                    planner.reset(initial_state_cart=planner.record_state_list[-1],
+                                  collision_checker=planner.collision_checker,
+                                  coordinate_system=planner.coordinate_system)
+
+                    self.planning_cycle = 0
 
                 # ====== paste in simulations
                 # ====== end of motion planner
@@ -1135,10 +1152,22 @@ class InteractivePlanner:
 
             # 处理交叉口停车
             close_to_intersection = False
-            # close_to_intersection = self.stop_before_intersection(scenario, planning_problem, planner,
-            #                                                       sumo_ego_vehicle.current_state.position,
-            #                                                       sumo_ego_vehicle)
-            # logger.info(f"=== close_to_intersection: {close_to_intersection} ===")
+            try:
+                close_to_intersection = self.stop_before_intersection(scenario, planner,
+                                                                      sumo_ego_vehicle.current_state.position,
+                                                                      sumo_ego_vehicle)
+                if close_to_intersection:
+                    goal_time_step = self.num_of_steps
+                    if 'current_count' in planning_problem.goal.state_list[0].__dict__.keys():
+                        if hasattr(planning_problem.goal.state_list[0].current_count, 'start'):
+                            goal_time_step = planning_problem.goal.state_list[0].current_count.start
+                    if 0 < goal_time_step - current_count < 50:
+                        close_to_intersection = False
+                        self.brake = False
+                        logger.info(f"=== 时间不够，不执行交叉口停车逻辑 ===")
+            except Exception as e:
+                logger.warning(f"*** failed to detect stopping before intersection ***")
+            logger.info(f"=== close_to_intersection: {close_to_intersection} ===")
 
             # 获取限速
             speed_limitation, desired_velocity = self.get_speed_limitation(scenario, current_lanelet,
@@ -1180,8 +1209,8 @@ class InteractivePlanner:
                 if 'current_count' in planning_problem.goal.state_list[0].__dict__.keys():
                     if hasattr(planning_problem.goal.state_list[0].current_count, 'start'):
                         goal_time_step = planning_problem.goal.state_list[0].current_count.start
-                    if 0 < goal_time_step - current_count < 50:
-                        planner.cost_function.w_low_speed = max(5e3 / (goal_time_step - current_count), 1e2)
+                        if 0 < goal_time_step - current_count < 50:
+                            planner.cost_function.w_low_speed = max(5e3 / (goal_time_step - current_count), 1e2)
                 planner.set_desired_curve_velocity(current_speed=planner.x_0.velocity,
                                                    desired_velocity=desired_velocity)
 
@@ -1231,7 +1260,7 @@ class InteractivePlanner:
                         self.optimal = planner.plan()
 
                 elif self.brake:
-                    logger.warning("All infeasible trajectories are due to hard braking in goal region")
+                    logger.warning("All infeasible trajectories are due to hard braking")
                     planner.set_cost_function(DefaultCostFunction())
                     desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
                     planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=desired_velocity)
