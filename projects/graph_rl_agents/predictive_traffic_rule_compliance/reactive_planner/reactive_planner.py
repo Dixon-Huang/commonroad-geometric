@@ -1360,7 +1360,7 @@ class ReactivePlanner(object):
 
             if max_curvature > 0.1:
                 # 计算安全速度
-                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=6)
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=2.5)
 
                 # 计算需要的减速距离
                 braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
@@ -1482,13 +1482,13 @@ class ReactivePlanner(object):
         - 中速时 factor ≈ 1.0 (保持约束)
         - 高速时 factor < 1.0 (收紧约束)
         """
-
-        if velocity <= 3:  # 低速
+        if velocity <= 0.5:  # 几乎静止
+            return 2.0
+        elif 0.5 < velocity <= 1.5:  # 低速
             return 1.5  # 放松约束
-        elif 3 < velocity <= 10.0:  # 中速
-            return 1.0
+        elif 1.5 < velocity <= 3:  # 中速
+            return 1.25
         else:  # 高速
-            # return 0.7 * (v_ref / velocity)  # 速度越高约束越严
             return 1.0
 
     def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray,

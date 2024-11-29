@@ -239,6 +239,7 @@ class InteractivePlanner:
 
     def __init__(self):
         # get current scenario info. from CR
+        self.slow_down_due_to_intersection = None
         self.not_use_world_state = None
         self.obstacle_id = None
         self.ego_state = None
@@ -392,7 +393,7 @@ class InteractivePlanner:
                                           timestep=current_timestep,
                                           config=config)
 
-    def emergency_brake(self, current_count, factor=3):
+    def emergency_brake(self, current_count, factor=1.5):
         logger.info(f"==== perform emergency brake with factor: {factor} ====")
         self.planning_cycle = -1
 
@@ -693,6 +694,13 @@ class InteractivePlanner:
         try:
             lanelet_network = scenario.lanelet_network
 
+            obstacle_speed = []
+            for obstacle in scenario.dynamic_obstacles:
+                # 判断obstacle和ego距离是否小于50m
+                if np.linalg.norm(obstacle.initial_state.position - self.ego_state.position) < 25:
+                    obstacle_speed.append(obstacle.initial_state.velocity)
+            speed_limitation_not_designated = min(max(obstacle_speed) * 1.2, 35) if obstacle_speed else 30
+
             # 检查是否有交通标志
             if current_lanelet.traffic_signs:
                 speed_limitations = []
@@ -718,18 +726,18 @@ class InteractivePlanner:
                     else:
                         desired_velocity = speed_limitation
                 else:
-                    logger.info(f"no speed limitation, set speed limitation to {max(30, current_speed)}")
-                    desired_velocity = max(30, current_speed)
+                    logger.info(f"no speed limitation, set speed limitation to {max(speed_limitation_not_designated, current_speed)}")
+                    desired_velocity = max(speed_limitation_not_designated, current_speed)
             else:
-                logger.info(f"no speed limitation，set speed limitation to {max(20, current_speed)}")
-                desired_velocity = max(20, current_speed)
+                logger.info(f"no speed limitation，set speed limitation to {max(speed_limitation_not_designated, current_speed)}")
+                desired_velocity = max(speed_limitation_not_designated, current_speed)
 
         except Exception as e:
             logger.warning(f"*** get speed limitation failed ***")
             logger.warning(f"failed reason: {e}")
             # 发生异常时使用默认值
-            speed_limitation = 30
-            desired_velocity = 30
+            speed_limitation = 20
+            desired_velocity = 20
 
         return speed_limitation, desired_velocity
 
@@ -855,10 +863,12 @@ class InteractivePlanner:
 
                 if self.plan_goal_stopping(planner, lanelet_end_point, distance_to_goal, ego_velocity, ttc):
                     self.brake = True
+                    self.slow_down_due_to_intersection = True
                     return True
                 else:
                     logger.info("平滑停车规划失败，使用常规制动")
                     self.brake = True
+                    self.slow_down_due_to_intersection = True
                     return False
 
             elif distance_to_goal < ego_velocity * 3 and (ttc < 3 or velocity_diff > 15):
@@ -866,6 +876,7 @@ class InteractivePlanner:
                 logger.info(
                     f'=== 接近路口 (距离: {distance_to_goal:.2f}m) 速度过高 ({ego_velocity:.2f}m/s), 执行制动 ===')
                 self.brake = True
+                self.slow_down_due_to_intersection = True
                 return False
 
         except Exception as e:
@@ -998,9 +1009,9 @@ class InteractivePlanner:
                                                                  planner.config.planning.time_steps_computation)
                     trajectory = Trajectory(current_count, [obstacle.initial_state] + predicted_states)
                     obstacle.prediction = TrajectoryPrediction(trajectory, shape=obstacle.obstacle_shape)
-                    if current_count == 0:
-                        obstacle.obstacle_shape.length += 0.5
-                        obstacle.obstacle_shape.width += 0.3
+                    # if current_count == 0:
+                        # obstacle.obstacle_shape.length += 0.5
+                        # obstacle.obstacle_shape.width += 0.3
                 planner.set_collision_checker(scenario=current_scenario)
                 planner.config.scenario = current_scenario
 
@@ -1152,11 +1163,12 @@ class InteractivePlanner:
 
             # 处理交叉口停车
             close_to_intersection = False
+            self.slow_down_due_to_intersection = False
             try:
                 close_to_intersection = self.stop_before_intersection(scenario, planner,
                                                                       sumo_ego_vehicle.current_state.position,
                                                                       sumo_ego_vehicle)
-                if close_to_intersection:
+                if self.slow_down_due_to_intersection:
                     goal_time_step = self.num_of_steps
                     if 'current_count' in planning_problem.goal.state_list[0].__dict__.keys():
                         if hasattr(planning_problem.goal.state_list[0].current_count, 'start'):
@@ -1178,20 +1190,20 @@ class InteractivePlanner:
 
                 # 获取wrold state用于robustness计算
                 ego_dynamic_obstacle = None
-                # try:
-                #     if current_count > 0 and not self.not_use_world_state:
-                #         ego_dynamic_obstacle = sumo_ego_vehicle.get_dynamic_obstacle()
-                #         self.obstacle_id = ego_dynamic_obstacle.obstacle_id
-                #         self.world_state = World.create_from_scenario(scenario)
-                #         self.world_state.add_controlled_vehicle(
-                #             self.scenario, copy.deepcopy(ego_dynamic_obstacle)
-                #         )
-                #         logger.info("获取world state成功")
-                # except Exception as e:
-                #     logger.info(f"*** failed to create world state ***")
-                #     logger.info("Error: " + str(e))
-                #     self.world_state = None
-                #     self.not_use_world_state = True
+                try:
+                    if current_count > 0 and not self.not_use_world_state:
+                        ego_dynamic_obstacle = sumo_ego_vehicle.get_dynamic_obstacle()
+                        self.obstacle_id = ego_dynamic_obstacle.obstacle_id
+                        self.world_state = World.create_from_scenario(scenario)
+                        self.world_state.add_controlled_vehicle(
+                            self.scenario, copy.deepcopy(ego_dynamic_obstacle)
+                        )
+                        logger.info("获取world state成功")
+                except Exception as e:
+                    logger.info(f"*** failed to create world state ***")
+                    logger.info("Error: " + str(e))
+                    self.world_state = None
+                    self.not_use_world_state = True
 
                 planner.set_cost_function(BaselineCostFunction(desired_speed=planner.desired_speed,
                                                                desired_d=0.0,
@@ -1335,20 +1347,17 @@ class InteractivePlanner:
 def main(cfg: RLProjectConfig):
     cfg_obj = OmegaConf.to_object(cfg)
 
-    # folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
+    folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
     # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
     # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
-    folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
+    # folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
 
-    # name_scenario = "DEU_Frankfurt-73_2_I-1" # 无法加载
     # name_scenario = "DEU_Frankfurt-95_6_I-1" # OK
     # name_scenario = "CHN_Sha-6_5_I-1-1" # OK
-    # name_scenario = "CHN_Sha-11_3_I-1-1" # 无法加载
-    # name_scenario = "DEU_Frankfurt-152_8_I-1" # 无法到达终点
+    name_scenario = "DEU_Frankfurt-152_8_I-1" # 无法到达终点
     # name_scenario = "ESP_Mad-2_1_I-1-1" # OK
 
     # name_scenario = "DEU_Cologne-63_5_I-1" # OK
-    # name_scenario = "DEU_Frankfurt-34_11_I-1" # 无法加在
     # name_scenario = "DEU_Aachen-2_1_I-1"
     # name_scenario = "DEU_Aachen-3_1_I-1" # OK
 
@@ -1373,9 +1382,9 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Aachen-3_1_I-1" # OK
     # name_scenario = "DEU_Aachen-3_2_I-1" # OK
     # name_scenario = "DEU_Aachen-3_3_I-1" # OK
-    name_scenario = "DEU_Aachen-3_7_I-1"  # 38的时候feasible失败
+    # name_scenario = "DEU_Aachen-3_7_I-1"  # 来不及到达目标
     # name_scenario = "DEU_Aachen-29_9_I-1" # OK
-    # name_scenario = "DEU_Cologne-21_1_I-1"
+    # name_scenario = "DEU_Cologne-21_1_I-1" # OK
     # name_scenario = "DEU_Cologne-63_8_I-1" # OK
     # name_scenario = "DEU_Dresden-3_14_I-1" # OK
     # name_scenario = "DEU_Dresden-3_29_I-1" # OK
@@ -1400,9 +1409,6 @@ def main(cfg: RLProjectConfig):
     ego_vehicle = list(ego_vehicles.values())[0]
     trajectory = ego_vehicle.driven_trajectory.trajectory
     trajectory._state_list = [ego_vehicle.initial_state] + trajectory.state_list
-
-    # for state in trajectory.state_list:
-    #     state.yaw_rate = 0
 
     # create mp4 animation
     create_video(simulated_scenario,
