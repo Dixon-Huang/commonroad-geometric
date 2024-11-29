@@ -997,8 +997,8 @@ class InteractivePlanner:
 
         logger.info("=" * 50 + " Start Simulation " + "=" * 50)
         try:
-            for current_count in range(self.num_of_steps):
-                # for current_count in range(0, 10):
+            # for current_count in range(self.num_of_steps):
+            for current_count in range(0, 300):
 
                 logger.info(f"process: {current_count}/{self.num_of_steps}")
 
