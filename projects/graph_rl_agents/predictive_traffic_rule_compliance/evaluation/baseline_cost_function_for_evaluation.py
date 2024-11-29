@@ -127,7 +127,6 @@ class BaselineCostFunction(CostFunction):
         # low speed costs
         min_speed = self.min_desired_speed
         speed_diff = np.maximum(0, min_speed - trajectory.cartesian.v)
-        # costs += self.w_low_speed * np.sum(np.exp(speed_diff) - 1)
         costs += self.w_low_speed * np.sum(speed_diff ** 2)
 
         epsilon = 1e-6  # 防止除以零

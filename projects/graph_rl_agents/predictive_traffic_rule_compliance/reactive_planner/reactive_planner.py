@@ -1158,20 +1158,6 @@ class ReactivePlanner(object):
         if self._draw_traj_set:
             self.stored_trajectories = feasible_trajectories + infeasible_trajectories
 
-        # Change: 先进行collision check
-        # # set feasible trajectories in bundle
-        # trajectory_bundle.trajectories = feasible_trajectories
-        #
-        # # ==== Sorting
-        # # sort trajectories according to their costs
-        # t0 = time.time()
-        # trajectory_bundle.sort()
-        # logger.info(f"Sort trajectories took:  \t{time.time() - t0:.7f}s")
-        #
-        # # ==== Collision checking
-        # collision_free_trajectory: Optional[TrajectorySample] = self._check_collisions(trajectory_bundle)
-        # return collision_free_trajectory
-
         # ==== Collision checking
         t0 = time.time()
         collision_free_trajectories = []
@@ -1209,7 +1195,7 @@ class ReactivePlanner(object):
                 [ego_tvo.append_obstacle(
                     # Change
                     # pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(len(pos1))]
-                    pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(round(len(pos1) / 3))]
+                    pycrcc.RectOBB(half_length, half_width, theta[i], pos1[i], pos2[i])) for i in range(round(len(pos1) / 3))] # Change
                 ego_tvo, err = trajectory_preprocess_obb_sum(ego_tvo)
                 if self._cc.collide(ego_tvo):
                     self._infeasible_count_collision += 1
@@ -1342,7 +1328,7 @@ class ReactivePlanner(object):
         braking_distance = (current_speed ** 2 - target_speed ** 2) / (2 * decel)
 
         # 添加安全余量
-        safety_margin = current_speed * self.config.planning.replanning_frequency * self.config.planning.dt * 1.2
+        safety_margin = current_speed * self.config.planning.replanning_frequency * self.config.planning.dt * 0.5 # Change
 
         return braking_distance + safety_margin
 
@@ -1360,7 +1346,7 @@ class ReactivePlanner(object):
 
             if max_curvature > 0.1:
                 # 计算安全速度
-                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=2.5)
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=5)
 
                 # 计算需要的减速距离
                 braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
@@ -1385,62 +1371,6 @@ class ReactivePlanner(object):
 
                 logger.info(f"Max curvature: {max_curvature:.2f}")
                 logger.info(f"Distance to curve: {actual_distance:.2f} m")
-
-                # # 根据是否存在弯道来调整collision check和规划的范围
-                # if distance_to_curve < max(1.5 * self.x_0.velocity * self.config.planning.time_steps_computation * self.config.planning.dt, 10):
-                #     # 获取当前的replanning_frequency
-                #     # current_freq = self.initial_replanning_frequency
-                #     # # 计算新的频率（向上取整保证至少是1）
-                #     # new_freq = max(1, (current_freq + 1) //
-                #
-                #     self.config.planning.time_steps_computation = 20
-                #     logger.info(
-                #         f"Curve ahead! Setting time steps computation to {self.config.planning.time_steps_computation}")
-                #
-                #     self.config.planning.replanning_frequency = 5
-                #     logger.info(
-                #         f"Curve ahead! Setting replanning frequency to {self.config.planning.replanning_frequency}")
-                #
-                #     # self.collision_check_range = int(np.ceil(self.initial_time_steps_computation/ 2))
-                #     self.collision_check_range = 10
-                #     logger.info(f"Curve ahead! Setting collision check range to {self.collision_check_range}")
-                #
-                #     if abs(self.x_0.velocity - safe_speed) >= 5:
-                #         self.cost_function.w_velocity = 10
-                #         self.cost_function.w_low_speed = 0
-                #         logger.info(f"Forcing speed cost function")
-                #
-                # else:
-                #     if self.x_0.velocity <= 5:
-                #         self.config.planning.time_steps_computation = 20
-                #         logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
-                #                     f"Setting time steps computation to {self.config.planning.time_steps_computation}")
-                #     # 根据速度调整规划的范围
-                #     elif 5 < self.x_0.velocity < 10:
-                #         self.config.planning.time_steps_computation = 25
-                #         logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
-                #                     f"Setting time steps computation to {self.config.planning.time_steps_computation}")
-                #
-                #     elif 10 <= self.x_0.velocity < 20:
-                #         self.config.planning.time_steps_computation = 30
-                #         logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
-                #                     f"Setting time steps computation to {self.config.planning.time_steps_computation}")
-                #
-                #     elif 20 <= self.x_0.velocity < 30:
-                #         self.config.planning.time_steps_computation = 35
-                #         logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
-                #                     f"Setting time steps computation to {self.config.planning.time_steps_computation}")
-                #
-                #     elif 30 <= self.x_0.velocity:
-                #         self.config.planning.time_steps_computation = 40
-                #         logger.info(f"No curve ahead and speed is {self.x_0.velocity}! "
-                #                     f"Setting time steps computation to {self.config.planning.time_steps_computation}")
-                #
-                #     self.config.planning.replanning_frequency = 10
-                #     logger.info(
-                #         f"No curve ahead! Setting replanning frequency to {self.config.planning.replanning_frequency}")
-                #     self.collision_check_range = 20
-                #     logger.info(f"No curve ahead! Setting collision check range to {self.collision_check_range}")
 
         # 原有的速度设置逻辑
         # set desired lon position to None if in velocity following mode
@@ -1482,14 +1412,17 @@ class ReactivePlanner(object):
         - 中速时 factor ≈ 1.0 (保持约束)
         - 高速时 factor < 1.0 (收紧约束)
         """
-        if velocity <= 0.5:  # 几乎静止
-            return 2.0
-        elif 0.5 < velocity <= 1.5:  # 低速
-            return 1.5  # 放松约束
+        if velocity <= 0.3:  # 几乎静止
+            return 1.8
+        elif 0.3 < velocity <= 1.0:  # 低速
+            return 1.6  # 放松约
+        elif 1.0 < velocity <= 1.5:  # 中低速
+            return 1.4
         elif 1.5 < velocity <= 3:  # 中速
-            return 1.25
+            return 1.2
         else:  # 高速
             return 1.0
+        # return 1
 
     def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray,
                            i: int) -> bool:
