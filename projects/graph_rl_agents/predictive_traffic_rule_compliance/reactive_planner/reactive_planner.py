@@ -61,6 +61,7 @@ class ReactivePlanner(object):
         : param config: Configuration object holding all planner-relevant configurations
         """
         # Set horizon variables
+        self.loose_constraints = None
         self.dt: float = config.planning.dt
         self.N: int = config.planning.time_steps_computation
         self.horizon: float = config.planning.dt * config.planning.time_steps_computation
@@ -1328,7 +1329,7 @@ class ReactivePlanner(object):
         braking_distance = (current_speed ** 2 - target_speed ** 2) / (2 * decel)
 
         # 添加安全余量
-        safety_margin = current_speed * self.config.planning.replanning_frequency * self.config.planning.dt * 0.5 # Change
+        safety_margin = current_speed * self.config.planning.replanning_frequency * self.config.planning.dt * 0.9 # Change
 
         return braking_distance + safety_margin
 
@@ -1342,11 +1343,12 @@ class ReactivePlanner(object):
             current_index = self.find_current_index()
 
             # 分析前方曲率
-            max_curvature, distance_to_curve = self.analyze_upcoming_curvature(current_index, round(current_speed * self.config.planning.time_steps_computation))
+            max_curvature, distance_to_curve = self.analyze_upcoming_curvature(
+                current_index, round(current_speed * self.config.planning.time_steps_computation))
 
             if max_curvature > 0.1:
                 # 计算安全速度
-                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=5)
+                safe_speed = self.calculate_safe_speed(max_curvature, current_speed, max_lateral_acc=3)
 
                 # 计算需要的减速距离
                 braking_distance = self.calculate_braking_distance(current_speed, safe_speed)
@@ -1412,17 +1414,19 @@ class ReactivePlanner(object):
         - 中速时 factor ≈ 1.0 (保持约束)
         - 高速时 factor < 1.0 (收紧约束)
         """
-        if velocity <= 0.3:  # 几乎静止
-            return 1.8
-        elif 0.3 < velocity <= 1.0:  # 低速
-            return 1.6  # 放松约
-        elif 1.0 < velocity <= 1.5:  # 中低速
-            return 1.4
-        elif 1.5 < velocity <= 3:  # 中速
-            return 1.2
-        else:  # 高速
-            return 1.0
-        # return 1
+        if self.loose_constraints:
+            if velocity <= 0.3:  # 几乎静止
+                return 1.5
+            elif 0.3 < velocity <= 1.0:  # 低速
+                return 1.4
+            elif 1.0 < velocity <= 1.5:  # 中低速
+                return 1.3
+            elif 1.5 < velocity <= 3:  # 中速
+                return 1.2
+            else:  # 高速
+                return 1.1
+        else:
+            return 1
 
     def _check_constraints(self, v: np.ndarray, kappa_gl: np.ndarray, theta_gl: np.ndarray, a: np.ndarray,
                            i: int) -> bool:

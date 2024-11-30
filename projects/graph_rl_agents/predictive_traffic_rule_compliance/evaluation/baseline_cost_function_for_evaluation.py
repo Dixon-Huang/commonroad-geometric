@@ -57,6 +57,7 @@ class BaselineCostFunction(CostFunction):
         self.w_low_speed = 0  # Low speed weight
         self.w_velocity = 1  # Velocity weight
         self.w_position = 50  # Position weight
+        self.beta = 1e2  # 静态障碍物权重
         self.min_desired_speed = self.speed_limitation if self.speed_limitation else 20  # Minimum desired speed
         # self.base_d_weight = 0.25  # 基础距离权重
         # self.final_d_weight = 20.0  # 终点距离权重
@@ -130,7 +131,7 @@ class BaselineCostFunction(CostFunction):
         costs += self.w_low_speed * np.sum(speed_diff ** 2)
 
         epsilon = 1e-6  # 防止除以零
-        beta = 2e2  # 静态障碍物权重
+        beta = self.beta  # 静态障碍物权重
         gamma = beta  # 动态障碍物权重
 
         # 使用反比例函数计算与静态障碍物的距离成本

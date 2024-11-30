@@ -63,7 +63,7 @@ model:
     sampling:
       sampling_method: 1 # original 1
       t_min: 0.4
-      num_sampling_levels: 4 # original 4
+      num_sampling_levels: 5 # original 4
 
     debug:
       show_plots: False

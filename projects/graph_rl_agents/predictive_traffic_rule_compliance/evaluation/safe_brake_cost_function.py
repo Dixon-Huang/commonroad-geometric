@@ -6,23 +6,23 @@ import numpy as np
 import commonroad_rp.trajectories
 from commonroad_rp.cost_function import CostFunction
 
-class DefaultCostFunction(CostFunction):
+class SafeBrakeCostFunction(CostFunction):
     """
     Default cost function for comfort driving
     """
 
     def __init__(self, desired_speed: Optional[float] = None, desired_d: float = 0.0,
                  desired_s: Optional[float] = None):
-        super(DefaultCostFunction, self).__init__()
+        super(SafeBrakeCostFunction, self).__init__()
         # target states
         self.desired_speed = desired_speed
         self.desired_d = desired_d
         self.desired_s = desired_s
-        self.w_lateral_position = 1
 
         # weights
         self.w_a = 5  # acceleration weight
         self.w_position = 1  # position weight
+        self.w_lateral_position = 1
 
     def evaluate(self, trajectory: commonroad_rp.trajectories.TrajectorySample):
         costs = 0.0

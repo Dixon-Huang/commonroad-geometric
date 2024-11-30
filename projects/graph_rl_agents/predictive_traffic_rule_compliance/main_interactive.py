@@ -70,6 +70,8 @@ from projects.graph_rl_agents.predictive_traffic_rule_compliance.config.custom_h
     CustomRLProjectConfig
 from projects.graph_rl_agents.predictive_traffic_rule_compliance.evaluation.baseline_cost_function_for_evaluation import \
     BaselineCostFunction
+from projects.graph_rl_agents.predictive_traffic_rule_compliance.evaluation.safe_brake_cost_function import \
+    SafeBrakeCostFunction
 from projects.graph_rl_agents.predictive_traffic_rule_compliance.evaluation.collision_avoiding_cost_function_for_evaluation import \
     CollisionAvoidingCostFunction
 from projects.graph_rl_agents.predictive_traffic_rule_compliance.run_scenario_visualization import \
@@ -537,7 +539,7 @@ class InteractivePlanner:
             ego_velocity: 当前速度
             ttc: 到达目标的预估时间
         """
-        planner.set_cost_function(DefaultCostFunction())
+        planner.set_cost_function(SafeBrakeCostFunction())
         try:
             # 找到参考路径上最近的点的弧长
             goal_s = self.find_nearest_route_point_to_goal(goal_center)
@@ -582,6 +584,7 @@ class InteractivePlanner:
                 if hasattr(planner.cost_function, "w_position"):
                     if abs(remaining_distance) < 5.0:
                         planner.cost_function.w_position *= 100.0  # 增加位置权重
+                        planner.cost_function.w_lateral_position *= 100.0  # 增加横向位置权重
 
                 # 使用ReactivePlanner的停车规划功能
                 planner.set_desired_lon_position(
@@ -665,7 +668,12 @@ class InteractivePlanner:
             logger.info(f"处理目标位置相关停车规划失败: {str(e)}")
             return None
 
-    def get_speed_limitation(self, scenario, current_lanelet, current_speed) -> tuple[float, float]:
+    def get_speed_limitation(self,
+                             scenario,
+                             current_lanelet,
+                             current_speed,
+                             current_count,
+                             planning_problem) -> tuple[float, float]:
         """
         获取当前车道的限速值和建议速度
 
@@ -689,6 +697,14 @@ class InteractivePlanner:
                 if np.linalg.norm(obstacle.initial_state.position - self.ego_state.position) < 25:
                     obstacle_speed.append(obstacle.initial_state.velocity)
             speed_limitation_not_designated = max(min(max(obstacle_speed) * 1.2, 35), 15) if obstacle_speed else 30
+
+            # 如果时间不够，可以稍微增加限速
+            goal_time_step = self.num_of_steps
+            if 'current_count' in planning_problem.goal.state_list[0].__dict__.keys():
+                if hasattr(planning_problem.goal.state_list[0].current_count, 'start'):
+                    goal_time_step = planning_problem.goal.state_list[0].current_count.start
+            if 0 < goal_time_step - current_count < 50:
+                speed_limitation_not_designated = max(speed_limitation_not_designated * 1.2, 20)
 
             # 检查是否有交通标志
             if current_lanelet.traffic_signs:
@@ -1008,6 +1024,7 @@ class InteractivePlanner:
                     obstacle.obstacle_shape.width += 0.1
             planner.set_collision_checker(scenario=current_scenario)
             planner.config.scenario = current_scenario
+            planner.loose_constraints = False
 
             self.ego_state = sumo_ego_vehicle.current_state
 
@@ -1193,27 +1210,29 @@ class InteractivePlanner:
 
             # 获取限速
             speed_limitation, desired_velocity = self.get_speed_limitation(scenario, current_lanelet,
-                                                                           planner.x_0.velocity)
+                                                                           planner.x_0.velocity,
+                                                                           current_count,
+                                                                           planning_problem)
 
             # 设置cost function
             if not self.is_reach_goal_region and not self.brake and not self.close_to_goal:
 
                 # 获取wrold state用于robustness计算
                 ego_dynamic_obstacle = None
-                # try:
-                #     if current_count > 0 and not self.not_use_world_state:
-                #         ego_dynamic_obstacle = sumo_ego_vehicle.get_dynamic_obstacle()
-                #         self.obstacle_id = ego_dynamic_obstacle.obstacle_id
-                #         self.world_state = World.create_from_scenario(scenario)
-                #         self.world_state.add_controlled_vehicle(
-                #             self.scenario, copy.deepcopy(ego_dynamic_obstacle)
-                #         )
-                #         logger.info("获取world state成功")
-                # except Exception as e:
-                #     logger.info(f"*** failed to create world state ***")
-                #     logger.info("Error: " + str(e))
-                #     self.world_state = None
-                #     self.not_use_world_state = True
+                try:
+                    if current_count > 0 and not self.not_use_world_state:
+                        ego_dynamic_obstacle = sumo_ego_vehicle.get_dynamic_obstacle()
+                        self.obstacle_id = ego_dynamic_obstacle.obstacle_id
+                        self.world_state = World.create_from_scenario(scenario)
+                        self.world_state.add_controlled_vehicle(
+                            self.scenario, copy.deepcopy(ego_dynamic_obstacle)
+                        )
+                        logger.info("获取world state成功")
+                except Exception as e:
+                    logger.info(f"*** failed to create world state ***")
+                    logger.info("Error: " + str(e))
+                    self.world_state = None
+                    self.not_use_world_state = True
 
                 planner.set_cost_function(BaselineCostFunction(desired_speed=planner.desired_speed,
                                                                desired_d=0.0,
@@ -1228,11 +1247,12 @@ class InteractivePlanner:
                                                                ))
 
                 # 目标时间接近时，增加反低速权重
+                goal_time_step = self.num_of_steps
                 if 'current_count' in planning_problem.goal.state_list[0].__dict__.keys():
                     if hasattr(planning_problem.goal.state_list[0].current_count, 'start'):
                         goal_time_step = planning_problem.goal.state_list[0].current_count.start
-                        if 0 < goal_time_step - current_count < 50:
-                            planner.cost_function.w_low_speed = max(5e3 / (goal_time_step - current_count), 1e2)
+                if 0 < goal_time_step - current_count < 30:
+                    planner.cost_function.w_low_speed = max(5e3 / (goal_time_step - current_count), 1e2)
                 planner.set_desired_curve_velocity(current_speed=planner.x_0.velocity,
                                                    desired_velocity=desired_velocity)
 
@@ -1240,7 +1260,7 @@ class InteractivePlanner:
                 pass
 
             else:
-                planner.set_cost_function(DefaultCostFunction())
+                planner.set_cost_function(SafeBrakeCostFunction())
                 self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, factor=2)
 
             # **************************
@@ -1268,45 +1288,55 @@ class InteractivePlanner:
                     logger.warning(f"visualize failed trajectory failed")
                     logger.warning(f"failed reason: {e}")
 
-                # If too many infeasible trajectories due to collision, perform emergency brake
-                if planner.infeasible_count_collision > 10:
-                    logger.warning("Too many infeasible trajectories due to collision")
-                    planner.set_cost_function(DefaultCostFunction())
-                    self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, factor=2)
+                # loose constraints and replan
+                logger.info("=== Replan with loose constraints ===")
+                try:
+                    planner.loose_constraints = True
                     self.optimal = planner.plan()
-                    if not self.optimal and planner.infeasible_count_collision < 10:
-                        logger.warning("All infeasible trajectories are due to hard braking")
-                        desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
-                        planner.set_desired_velocity(current_speed=planner.x_0.velocity,
-                                                     desired_velocity=desired_velocity)
-                        self.optimal = planner.plan()
-
-                elif self.brake:
-                    logger.warning("All infeasible trajectories are due to hard braking")
-                    planner.set_cost_function(DefaultCostFunction())
-                    desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
-                    planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=desired_velocity)
-                    self.optimal = planner.plan()
-
-                else:
-                    logger.warning("All infeasible trajectories are due to kinematic constraints")
-                    planner.set_cost_function(DefaultCostFunction())
-                    planner.set_desired_velocity(current_speed=planner.x_0.velocity,
-                                                 desired_velocity=planner.x_0.velocity)
-                    self.optimal = planner.plan()
+                finally:
+                    # planner.loose_constraints = False
+                    pass
 
                 if self.optimal is None:
-                    # logger.warning("Failed to plan optimal trajectory with fail-safe cost function, perform emergency brake")
-                    next_state = self.emergency_brake(current_count)
-                    next_state_shifted = next_state.translate_rotate(
-                        np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
-                                  -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
-                        0.0)
-                    planner.record_state_and_input(next_state_shifted)
-                    planner.reset(initial_state_cart=planner.record_state_list[-1],
-                                  collision_checker=planner.collision_checker,
-                                  coordinate_system=planner.coordinate_system)
-                    return next_state
+                    # If too many infeasible trajectories due to collision, perform emergency brake
+                    if planner.infeasible_count_collision > 10:
+                        logger.warning("=== Too many infeasible trajectories due to collision ===")
+                        planner.set_cost_function(SafeBrakeCostFunction())
+                        self.emergency_brake_with_reactive_planner(planner, sumo_ego_vehicle, factor=2)
+                        self.optimal = planner.plan()
+                        if not self.optimal and planner.infeasible_count_collision < 10:
+                            logger.warning("=== All infeasible trajectories are due to hard braking ===")
+                            desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
+                            planner.set_desired_velocity(current_speed=planner.x_0.velocity,
+                                                         desired_velocity=desired_velocity)
+                            self.optimal = planner.plan()
+
+                    elif self.brake:
+                        logger.warning("=== All infeasible trajectories are due to hard braking ===")
+                        planner.set_cost_function(SafeBrakeCostFunction())
+                        desired_velocity = planner.x_0.velocity - 4 if planner.x_0.velocity > 4 else 0
+                        planner.set_desired_velocity(current_speed=planner.x_0.velocity, desired_velocity=desired_velocity)
+                        self.optimal = planner.plan()
+
+                    else:
+                        logger.warning("=== All infeasible trajectories are due to kinematic constraints ===")
+                        planner.set_cost_function(SafeBrakeCostFunction())
+                        planner.set_desired_velocity(current_speed=planner.x_0.velocity,
+                                                     desired_velocity=planner.x_0.velocity)
+                        self.optimal = planner.plan()
+
+                    if self.optimal is None:
+                        # logger.warning("Failed to plan optimal trajectory with fail-safe cost function, perform emergency brake")
+                        next_state = self.emergency_brake(current_count)
+                        next_state_shifted = next_state.translate_rotate(
+                            np.array([-self.vehicle.parameters.b * np.cos(next_state.orientation),
+                                      -self.vehicle.parameters.b * np.sin(next_state.orientation)]),
+                            0.0)
+                        planner.record_state_and_input(next_state_shifted)
+                        planner.reset(initial_state_cart=planner.record_state_list[-1],
+                                      collision_checker=planner.collision_checker,
+                                      coordinate_system=planner.coordinate_system)
+                        return next_state
 
             # logger.info(f"x_0_initial: {planner.x_0}")
             # logger.info(f"x_0_planned: {self.optimal[0].state_list[0]}")
@@ -1359,8 +1389,8 @@ def main(cfg: RLProjectConfig):
 
     # folder_scenarios = os.path.abspath('/home/yanliang/commonroad-scenarios/scenarios/interactive/SUMO/')
     # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-interactive-scenarios/scenarios/tutorial")
-    folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
-    # folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
+    # folder_scenarios = os.path.abspath("/home/yanliang/commonroad-scenarios/scenarios/interactive/hand-crafted")
+    folder_scenarios = os.path.abspath("/home/yanliang/scenarios_phase")
 
     # name_scenario = "DEU_Frankfurt-95_6_I-1" # OK
     # name_scenario = "CHN_Sha-6_5_I-1-1" # OK
@@ -1385,7 +1415,7 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_A9-1_2_I-1-1" # OK
     # name_scenario = "ZAM_Tjunction-1_258_I-1-1"  # 解不了
     # name_scenario = "ZAM_Tjunction-1_110_I-1-1"
-    name_scenario = "ZAM_Tjunction-1_75_I-1-1"  # 修改了intersection信息**
+    # name_scenario = "ZAM_Tjunction-1_75_I-1-1"  # 修改了intersection信息**
     # name_scenario = "DEU_Gar-1_2_I-1-1" # OK
     # name_scenario = "ZAM_Merge-1_1_I-1-1" # 刹不住车的
 
@@ -1393,18 +1423,37 @@ def main(cfg: RLProjectConfig):
     # name_scenario = "DEU_Aachen-3_2_I-1" # OK
     # name_scenario = "DEU_Aachen-3_3_I-1" # OK
     # name_scenario = "DEU_Aachen-3_7_I-1"  # OK
+    # name_scenario = "DEU_Aachen-3_12_I-1"  # OK
+    name_scenario = "DEU_Aachen-3_13_I-1"  # OK
     # name_scenario = "DEU_Aachen-29_9_I-1" # OK
     # name_scenario = "DEU_Aachen-29_12_I-1" # 速度太慢被后车追尾
     # name_scenario = "DEU_Aachen-29_13_I-1" # OK
     # name_scenario = "DEU_Aachen-29_14_I-1" # OK
     # name_scenario = "DEU_Aachen-29_15_I-1" # OK
+    # name_scenario = "DEU_Aachen-33_3_I-1" # 速度太慢被后车追尾
+    # name_scenario = "DEU_Aachen-33_4_I-1" # 出生位置有车，无法解
+    # name_scenario = "DEU_Aachen-33_5_I-1" # OK
+    # name_scenario = "DEU_Aachen-33_6_I-1" # OK
     # name_scenario = "DEU_Cologne-27_15_I-1" # OK
     # name_scenario = "DEU_Cologne-21_1_I-1" # OK
+    # name_scenario = "DEU_Cologne-21_2_I-1" # OK
+    # name_scenario = "DEU_Cologne-32_2_I-1" # 初始速度太高，无法解
+    # name_scenario = "DEU_Cologne-32_3_I-1" # OK
+    # name_scenario = "DEU_Cologne-32_4_I-1" # OK 路口直行，减速通过
+    # name_scenario = "DEU_Cologne-32_5_I-1" # OK
+    # name_scenario = "DEU_Cologne-32_13_I-1" # OK 初始速度太高，但是通过动态放松限制解开了
+    # name_scenario = "DEU_Cologne-40_6_I-1" # OK
+    # name_scenario = "DEU_Cologne-61_24_I-1" # 出生位置有车，无法解
+    # name_scenario = "DEU_Cologne-61_25_I-1" # OK
+    # name_scenario = "DEU_Cologne-61_26_I-1" # OK
     # name_scenario = "DEU_Cologne-63_8_I-1" # OK
     # name_scenario = "DEU_Dresden-3_14_I-1" # OK
     # name_scenario = "DEU_Dresden-3_29_I-1" # OK
     # name_scenario = "DEU_Dresden-18_4_I-1" # OK
+    # name_scenario = "DEU_Dresden-18_5_I-1" # OK
+    # name_scenario = "DEU_Dresden-18_6_I-1" # OK
     # name_scenario = "DEU_Dresden-18_29_I-1" # OK
+    # name_scenario = "DEU_Dresden-18_30_I-1" # OK 要到达终点时路径诡异，增加约束后正常
     # name_scenario = "DEU_A99-1_1_I-1-1" # OK
 
     main_planner = InteractivePlanner()
