@@ -1,0 +1,48 @@
+from abc import ABC, abstractmethod
+from typing import Optional
+
+import numpy as np
+
+import commonroad_rp.trajectories
+from commonroad_rp.cost_function import CostFunction
+
+class DefaultCostFunction(CostFunction):
+    """
+    Default cost function for comfort driving
+    """
+
+    def __init__(self, desired_speed: Optional[float] = None, desired_d: float = 0.0,
+                 desired_s: Optional[float] = None):
+        super(DefaultCostFunction, self).__init__()
+        # target states
+        self.desired_speed = desired_speed
+        self.desired_d = desired_d
+        self.desired_s = desired_s
+        self.w_lateral_position = 1
+
+        # weights
+        self.w_a = 5  # acceleration weight
+        self.w_position = 1  # position weight
+
+    def evaluate(self, trajectory: commonroad_rp.trajectories.TrajectorySample):
+        costs = 0.0
+        # acceleration costs
+        costs += np.sum((self.w_a * trajectory.cartesian.a) ** 2)
+        # velocity costs
+        if self.desired_speed is not None:
+            costs += np.sum((5 * (trajectory.cartesian.v - self.desired_speed)) ** 2) + \
+                     (50 * (trajectory.cartesian.v[-1] - self.desired_speed) ** 2) + \
+                     (100 * (trajectory.cartesian.v[int(len(trajectory.cartesian.v) / 2)] - self.desired_speed) ** 2)
+        if self.desired_s is not None:
+            costs += self.w_position * np.sum((0.25 * (self.desired_s - trajectory.curvilinear.s)) ** 2) + \
+                     (20 * (self.desired_s - trajectory.curvilinear.s[-1])) ** 2
+
+        # distance costs
+        costs += self.w_lateral_position * np.sum((0.25 * (self.desired_d - trajectory.curvilinear.d)) ** 2) + \
+                 (20 * (self.desired_d - trajectory.curvilinear.d[-1])) ** 2
+
+        # orientation costs
+        costs += np.sum((0.25 * np.abs(trajectory.curvilinear.theta)) ** 2) + (
+                5 * (np.abs(trajectory.curvilinear.theta[-1]))) ** 2
+
+        return costs
